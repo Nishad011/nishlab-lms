@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manage Course | NISHLAB LMS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="navbar">
+  <div class="brand">NISHLAB LMS — Trainer</div>
+  <div>
+    <a href="trainer-dashboard.html">← Back</a>
+    <a href="#" onclick="logout()">Logout</a>
+  </div>
+</div>
+
+<div class="container">
+  <div id="content"><div class="spinner"></div></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+const params = new URLSearchParams(window.location.search);
+const courseId = params.get("id");
+let currentUser = null, course = null;
+
+requireRole(["trainer"], async (user, data) => {
+  currentUser = user;
+  const doc = await db.collection("courses").doc(courseId).get();
+  if (!doc.exists || doc.data().trainerId !== currentUser.uid) {
+    document.getElementById("content").innerHTML = "<p>Course not found or aapka nahi hai.</p>";
+    return;
+  }
+  course = doc.data();
+  renderShell();
+  showTab("lessons");
+});
+
+function renderShell() {
+  document.getElementById("content").innerHTML = `
+    <h1>${course.title}</h1>
+    <span class="tag ${course.published ? 'tag-published' : 'tag-pending'}" id="statusTag">${course.published ? 'Published' : 'Draft'}</span>
+    <button class="btn btn-sm" style="margin-left:10px;" onclick="togglePublish()">${course.published ? 'Unpublish' : 'Publish'}</button>
+    <div class="tabs" style="margin-top:20px;">
+      <div class="tab active" id="tabL" onclick="showTab('lessons')">Lessons</div>
+      <div class="tab" id="tabQ" onclick="showTab('quiz')">Quiz</div>
+      <div class="tab" id="tabA" onclick="showTab('assignments')">Assignments</div>
+      <div class="tab" id="tabS" onclick="showTab('students')">Students</div>
+    </div>
+    <div id="tabContent"></div>
+  `;
+}
+
+function showTab(tab) {
+  ["L","Q","A","S"].forEach(t => document.getElementById("tab"+t).classList.remove("active"));
+  document.getElementById("tab" + tab[0].toUpperCase()).classList.add("active");
+  if (tab === "lessons") renderLessons();
+  if (tab === "quiz") renderQuizEditor();
+  if (tab === "assignments") renderAssignments();
+  if (tab === "students") renderStudents();
+}
+
+async function togglePublish() {
+  course.published = !course.published;
+  await db.collection("courses").doc(courseId).update({ published: course.published });
+  document.getElementById("statusTag").className = "tag " + (course.published ? "tag-published" : "tag-pending");
+  document.getElementById("statusTag").textContent = course.published ? "Published" : "Draft";
+}
+
+// ---------------- LESSONS ----------------
+async function renderLessons() {
+  const snap = await db.collection("courses").doc(courseId).collection("lessons").orderBy("order").get();
+  let rows = snap.docs.map(d => `
+    <tr><td>${d.data().order}</td><td>${d.data().title}</td><td><a href="${d.data().videoUrl}" target="_blank">Link</a></td>
+    <td><button class="btn btn-sm btn-danger" onclick="deleteLesson('${d.id}')">Delete</button></td></tr>
+  `).join("");
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>Add Lesson</h3>
+      <label>Lesson Title</label><input type="text" id="lTitle">
+      <label>Video URL (YouTube/Vimeo link)</label><input type="text" id="lUrl" placeholder="https://youtube.com/...">
+      <label>Order (number)</label><input type="number" id="lOrder" value="${snap.size + 1}">
+      <button class="btn" onclick="addLesson()">Add Lesson</button>
+    </div>
+    <div class="card">
+      <h3>Lessons (${snap.size})</h3>
+      <table><tr><th>#</th><th>Title</th><th>Video</th><th></th></tr>${rows || '<tr><td colspan="4" class="muted">Koi lesson nahi</td></tr>'}</table>
+    </div>
+  `;
+}
+async function addLesson() {
+  const title = document.getElementById("lTitle").value.trim();
+  const videoUrl = document.getElementById("lUrl").value.trim();
+  const order = parseInt(document.getElementById("lOrder").value) || 1;
+  if (!title) return alert("Lesson title bharo.");
+  await db.collection("courses").doc(courseId).collection("lessons").add({ title, videoUrl, order });
+  renderLessons();
+}
+async function deleteLesson(id) {
+  if (!confirm("Delete this lesson?")) return;
+  await db.collection("courses").doc(courseId).collection("lessons").doc(id).delete();
+  renderLessons();
+}
+
+// ---------------- QUIZ ----------------
+let quizQuestions = [];
+async function renderQuizEditor() {
+  const snap = await db.collection("courses").doc(courseId).collection("quiz").limit(1).get();
+  quizQuestions = snap.empty ? [] : snap.docs[0].data().questions;
+  window._quizDocId = snap.empty ? null : snap.docs[0].id;
+  renderQuizUI();
+}
+function renderQuizUI() {
+  let rows = quizQuestions.map((q, i) => `
+    <div class="card">
+      <strong>${i + 1}. ${q.question}</strong>
+      <ul>${q.options.map((o, oi) => `<li>${o} ${oi === q.correctIndex ? '✅' : ''}</li>`).join("")}</ul>
+      <button class="btn btn-sm btn-danger" onclick="removeQuestion(${i})">Remove</button>
+    </div>
+  `).join("");
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>Add Quiz Question</h3>
+      <label>Question</label><input type="text" id="qText">
+      <label>Option 1</label><input type="text" id="qOpt0">
+      <label>Option 2</label><input type="text" id="qOpt1">
+      <label>Option 3</label><input type="text" id="qOpt2">
+      <label>Option 4</label><input type="text" id="qOpt3">
+      <label>Correct Option (1-4)</label><input type="number" id="qCorrect" min="1" max="4">
+      <button class="btn" onclick="addQuestion()">Add Question</button>
+    </div>
+    <h3>Questions (${quizQuestions.length})</h3>
+    ${rows || '<p class="muted">Koi question nahi. Quiz optional hai — bina quiz ke bhi certificate mil jayega course complete hone par.</p>'}
+  `;
+}
+async function addQuestion() {
+  const question = document.getElementById("qText").value.trim();
+  const options = [0,1,2,3].map(i => document.getElementById("qOpt"+i).value.trim());
+  const correctIndex = parseInt(document.getElementById("qCorrect").value) - 1;
+  if (!question || options.some(o => !o) || isNaN(correctIndex) || correctIndex < 0 || correctIndex > 3) {
+    return alert("Sab fields sahi se bharo (Correct Option 1-4 mein ho).");
+  }
+  quizQuestions.push({ question, options, correctIndex });
+  await saveQuiz();
+  renderQuizUI();
+}
+async function removeQuestion(i) {
+  quizQuestions.splice(i, 1);
+  await saveQuiz();
+  renderQuizUI();
+}
+async function saveQuiz() {
+  if (window._quizDocId) {
+    await db.collection("courses").doc(courseId).collection("quiz").doc(window._quizDocId).update({ questions: quizQuestions });
+  } else {
+    const ref = await db.collection("courses").doc(courseId).collection("quiz").add({ questions: quizQuestions });
+    window._quizDocId = ref.id;
+  }
+}
+
+// ---------------- ASSIGNMENTS ----------------
+async function renderAssignments() {
+  const snap = await db.collection("courses").doc(courseId).collection("assignments").get();
+  let cards = "";
+  for (const doc of snap.docs) {
+    const a = doc.data();
+    const subSnap = await db.collection("courses").doc(courseId).collection("assignments").doc(doc.id).collection("submissions").get();
+    let subRows = subSnap.docs.map(s => {
+      const sub = s.data();
+      return `<tr>
+        <td>${sub.studentName}</td>
+        <td>${sub.submissionText ? sub.submissionText.slice(0,60) : ''} ${sub.submissionLink ? `<a href="${sub.submissionLink}" target="_blank">link</a>` : ''}</td>
+        <td><input type="number" id="grade_${s.id}" value="${sub.grade ?? ''}" style="width:70px;margin:0;" min="0" max="100"></td>
+        <td><button class="btn btn-sm" onclick="saveGrade('${doc.id}','${s.id}')">Save</button></td>
+      </tr>`;
+    }).join("");
+    cards += `
+      <div class="card">
+        <h3>${a.title}</h3>
+        <p class="muted">${a.description}</p>
+        <p class="muted">Due: ${a.dueDate || 'N/A'}</p>
+        <table><tr><th>Student</th><th>Submission</th><th>Grade</th><th></th></tr>
+        ${subRows || '<tr><td colspan="4" class="muted">Koi submission nahi abhi</td></tr>'}</table>
+      </div>
+    `;
+  }
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>Create Assignment</h3>
+      <label>Title</label><input type="text" id="aTitle">
+      <label>Description / Instructions</label><textarea id="aDesc" rows="3"></textarea>
+      <label>Due Date</label><input type="date" id="aDue">
+      <button class="btn" onclick="createAssignment()">Create Assignment</button>
+    </div>
+    ${cards || '<p class="muted">Koi assignment nahi bana abhi.</p>'}
+  `;
+}
+async function createAssignment() {
+  const title = document.getElementById("aTitle").value.trim();
+  const description = document.getElementById("aDesc").value.trim();
+  const dueDate = document.getElementById("aDue").value;
+  if (!title) return alert("Title bharo.");
+  await db.collection("courses").doc(courseId).collection("assignments").add({ title, description, dueDate });
+  renderAssignments();
+}
+async function saveGrade(assignmentId, subId) {
+  const grade = parseInt(document.getElementById(`grade_${subId}`).value);
+  await db.collection("courses").doc(courseId).collection("assignments").doc(assignmentId)
+    .collection("submissions").doc(subId).update({ grade });
+  alert("Grade saved!");
+}
+
+// ---------------- STUDENTS ----------------
+async function renderStudents() {
+  const snap = await db.collection("enrollments").where("courseId", "==", courseId).get();
+  const lessonsSnap = await db.collection("courses").doc(courseId).collection("lessons").get();
+  const total = lessonsSnap.size;
+  let rows = "";
+  for (const doc of snap.docs) {
+    const e = doc.data();
+    const userDoc = await db.collection("users").doc(e.studentId).get();
+    const name = userDoc.exists ? userDoc.data().name : "Unknown";
+    const completed = e.completedLessons ? e.completedLessons.length : 0;
+    const pct = total ? Math.round((completed / total) * 100) : 0;
+    rows += `<tr><td>${name}</td><td>${pct}%</td><td>${e.quizScore != null ? e.quizScore : '-'}</td></tr>`;
+  }
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>Enrolled Students (${snap.size})</h3>
+      <table><tr><th>Name</th><th>Progress</th><th>Quiz Score</th></tr>
+      ${rows || '<tr><td colspan="3" class="muted">Koi student enroll nahi hua abhi</td></tr>'}</table>
+    </div>
+  `;
+}
+</script>
+</body>
+</html>

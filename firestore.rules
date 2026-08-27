@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function getUserRole() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role; }
+    function isAdmin() { return isSignedIn() && getUserRole() == 'admin'; }
+    function isTrainer() { return isSignedIn() && getUserRole() == 'trainer'; }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && request.resource.data.role in ['student','trainer']
+                    && request.resource.data.isApproved == (request.resource.data.role == 'student');
+      allow update: if isAdmin() || (isSignedIn() && request.auth.uid == userId
+                    && request.resource.data.role == resource.data.role
+                    && request.resource.data.isApproved == resource.data.isApproved);
+      allow delete: if isAdmin();
+    }
+
+    match /courses/{courseId} {
+      allow read: if isSignedIn();
+      allow create: if isTrainer();
+      allow update, delete: if isAdmin() || (isSignedIn() && resource.data.trainerId == request.auth.uid);
+
+      match /lessons/{lessonId} {
+        allow read: if isSignedIn();
+        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
+      }
+      match /quiz/{quizId} {
+        allow read: if isSignedIn();
+        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
+      }
+      match /assignments/{assignmentId} {
+        allow read: if isSignedIn();
+        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
+
+        match /submissions/{subId} {
+          allow read: if isAdmin()
+                      || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid)
+                      || (isSignedIn() && resource.data.studentId == request.auth.uid);
+          allow create: if isSignedIn() && request.resource.data.studentId == request.auth.uid;
+          allow update: if isAdmin()
+                        || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid)
+                        || (isSignedIn() && resource.data.studentId == request.auth.uid);
+        }
+      }
+    }
+
+    match /enrollments/{enrollId} {
+      allow read: if isAdmin()
+                  || (isSignedIn() && resource.data.studentId == request.auth.uid)
+                  || (isSignedIn() && get(/databases/$(database)/documents/courses/$(resource.data.courseId)).data.trainerId == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.studentId == request.auth.uid;
+      allow update: if isAdmin() || (isSignedIn() && resource.data.studentId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+  }
+}

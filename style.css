@@ -1,0 +1,143 @@
+/* ============================================================
+   NISHLAB LMS — Design System
+   Concept: engineering blueprint / drafting-sheet aesthetic
+   Display: Space Grotesk | Body: Inter | Data/labels: JetBrains Mono
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
+
+:root{
+  --navy:#071a3a; --navy2:#0d2b5d; --ink:#0b1220; --muted:#5b6472;
+  --paper:#faf9f5; --line:#e3ded0; --card:#ffffff;
+  --gold:#f4b400; --gold-dark:#caa000;
+  --success:#1f8a5f; --success-bg:#e3f3ea;
+  --danger:#b3261e; --danger-bg:#fbe9e7;
+  --pending-bg:#fdf1d6; --pending-ink:#8a5a00;
+  --font-display:'Space Grotesk',sans-serif;
+  --font-body:'Inter',system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',monospace;
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  font-family:var(--font-body);background:var(--paper);color:var(--ink);margin:0;
+  background-image:
+    linear-gradient(rgba(7,26,58,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(7,26,58,.035) 1px, transparent 1px);
+  background-size:28px 28px;
+}
+a{color:inherit;}
+h1,h2,h3{font-family:var(--font-display);color:var(--navy);margin-top:0;font-weight:700;letter-spacing:-.01em;}
+h1{font-size:28px;} h2{font-size:20px;} h3{font-size:16px;}
+
+/* ---------- Nav ---------- */
+.navbar{
+  background:var(--navy);color:#fff;padding:16px 28px;
+  display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;
+  border-bottom:3px solid var(--gold);
+}
+.navbar a{color:#cdd6e6;text-decoration:none;margin-left:20px;font-weight:500;font-size:14px;transition:color .15s;}
+.navbar a:hover{color:var(--gold);}
+.navbar .brand{font-family:var(--font-display);font-weight:700;letter-spacing:.02em;font-size:18px;}
+.navbar .brand::before{content:'◈ ';color:var(--gold);}
+
+/* ---------- Buttons ---------- */
+.btn{
+  background:var(--gold);color:var(--navy);border:none;padding:11px 22px;border-radius:6px;
+  font-weight:700;cursor:pointer;text-decoration:none;display:inline-block;font-size:13px;
+  font-family:var(--font-body);letter-spacing:.01em;transition:transform .1s,background .15s;
+}
+.btn:hover{background:var(--gold-dark);}
+.btn:active{transform:scale(.98);}
+.btn-outline{background:transparent;border:1.5px solid var(--navy);color:var(--navy);}
+.btn-outline:hover{background:var(--navy);color:#fff;}
+.btn-danger{background:var(--danger);color:#fff;}
+.btn-danger:hover{background:#8f1e17;}
+.btn-sm{padding:7px 15px;font-size:12px;}
+
+/* ---------- Layout ---------- */
+.container{max-width:1120px;margin:0 auto;padding:32px 24px;}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:20px;}
+
+/* ---------- Cards: "drafting sheet" treatment ---------- */
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:22px;margin-bottom:18px;position:relative;
+  box-shadow:0 1px 2px rgba(7,26,58,.04);
+}
+.card::before{
+  content:'';position:absolute;top:0;left:20px;width:34px;height:3px;background:var(--gold);
+}
+
+/* ---------- Forms ---------- */
+input,textarea,select{
+  width:100%;padding:11px 12px;border:1.5px solid var(--line);border-radius:6px;
+  margin-bottom:14px;box-sizing:border-box;font-size:14px;font-family:var(--font-body);
+  background:#fff;color:var(--ink);transition:border-color .15s;
+}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--gold);}
+label{
+  font-family:var(--font-mono);font-weight:600;font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);display:block;margin-bottom:6px;
+}
+
+/* ---------- Progress: ruler/gauge style ---------- */
+.progress-bar{
+  background:#eeece4;border-radius:20px;height:10px;overflow:hidden;
+  border:1px solid var(--line);
+  background-image:repeating-linear-gradient(90deg, transparent 0 9%, rgba(7,26,58,.08) 9% 10%);
+}
+.progress-fill{background:linear-gradient(90deg,var(--gold-dark),var(--gold));height:100%;transition:width .4s;}
+
+/* ---------- Tags: mono data-label style ---------- */
+.tag{
+  display:inline-block;padding:4px 11px;border-radius:4px;font-size:11px;font-weight:600;
+  font-family:var(--font-mono);letter-spacing:.05em;text-transform:uppercase;
+}
+.tag-pending{background:var(--pending-bg);color:var(--pending-ink);}
+.tag-approved{background:var(--success-bg);color:var(--success);}
+.tag-published{background:#dbe7fb;color:var(--navy2);}
+
+/* ---------- Tabs ---------- */
+.tabs{display:flex;gap:4px;margin-bottom:22px;border-bottom:2px solid var(--line);flex-wrap:wrap;}
+.tab{
+  padding:11px 20px;cursor:pointer;font-weight:600;color:var(--muted);
+  border-bottom:3px solid transparent;font-size:14px;transition:color .15s;
+}
+.tab:hover{color:var(--navy);}
+.tab.active{color:var(--navy);border-color:var(--gold);}
+
+/* ---------- Utility ---------- */
+.hidden{display:none !important;}
+.center{text-align:center;}
+.muted{color:var(--muted);font-size:13px;}
+.mono{font-family:var(--font-mono);}
+
+/* ---------- Auth pages ---------- */
+.auth-box{
+  max-width:410px;margin:70px auto;background:var(--card);padding:40px 36px;
+  border-radius:12px;border:1px solid var(--line);box-shadow:0 8px 30px rgba(7,26,58,.08);
+}
+.auth-box h1{font-size:24px;}
+.auth-box h1::after{content:'';display:block;width:40px;height:3px;background:var(--gold);margin:10px auto 0;}
+
+/* ---------- Lessons ---------- */
+.lesson-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);}
+.lesson-row input[type=checkbox]{width:auto;margin:0;accent-color:var(--gold-dark);}
+
+/* ---------- Tables ---------- */
+table{width:100%;border-collapse:collapse;}
+table th,table td{text-align:left;padding:11px;border-bottom:1px solid var(--line);font-size:14px;}
+table th{
+  font-family:var(--font-mono);color:var(--muted);font-size:10.5px;
+  text-transform:uppercase;letter-spacing:.06em;font-weight:600;
+}
+
+/* ---------- Spinner ---------- */
+.spinner{
+  border:3px solid var(--line);border-top:3px solid var(--gold);border-radius:50%;
+  width:26px;height:26px;animation:spin .8s linear infinite;margin:24px auto;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* ---------- Stat cards (admin dashboard) ---------- */
+.stat-num{font-family:var(--font-mono);font-size:32px;font-weight:700;color:var(--navy);}

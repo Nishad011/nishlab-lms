@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Dashboard | NISHLAB LMS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="navbar">
+  <div class="brand">NISHLAB LMS — Admin</div>
+  <div>
+    <span id="userName" style="color:var(--gold);font-weight:600;"></span>
+    <a href="#" onclick="logout()">Logout</a>
+  </div>
+</div>
+
+<div class="container">
+  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px;">
+    <div class="card center"><div class="stat-num" id="statUsers">-</div><p class="muted">Total Users</p></div>
+    <div class="card center"><div class="stat-num" id="statTrainers">-</div><p class="muted">Trainers</p></div>
+    <div class="card center"><div class="stat-num" id="statCourses">-</div><p class="muted">Courses</p></div>
+    <div class="card center"><div class="stat-num" id="statEnrollments">-</div><p class="muted">Enrollments</p></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" id="tabP" onclick="showTab('pending')">Pending Trainers</div>
+    <div class="tab" id="tabU" onclick="showTab('users')">All Users</div>
+    <div class="tab" id="tabC" onclick="showTab('courses')">All Courses</div>
+  </div>
+  <div id="tabContent"><div class="spinner"></div></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+requireRole(["admin"], (user, data) => {
+  document.getElementById("userName").textContent = data.name;
+  loadStats();
+  showTab("pending");
+});
+
+async function loadStats() {
+  const usersSnap = await db.collection("users").get();
+  const coursesSnap = await db.collection("courses").get();
+  const enrollSnap = await db.collection("enrollments").get();
+  document.getElementById("statUsers").textContent = usersSnap.size;
+  document.getElementById("statTrainers").textContent = usersSnap.docs.filter(d => d.data().role === "trainer").length;
+  document.getElementById("statCourses").textContent = coursesSnap.size;
+  document.getElementById("statEnrollments").textContent = enrollSnap.size;
+}
+
+function showTab(tab) {
+  ["P","U","C"].forEach(t => document.getElementById("tab"+t).classList.remove("active"));
+  document.getElementById("tab" + tab[0].toUpperCase()).classList.add("active");
+  if (tab === "pending") renderPending();
+  if (tab === "users") renderUsers();
+  if (tab === "courses") renderCourses();
+}
+
+async function renderPending() {
+  const snap = await db.collection("users").where("role", "==", "trainer").where("isApproved", "==", false).get();
+  let rows = snap.docs.map(d => `
+    <tr><td>${d.data().name}</td><td>${d.data().email}</td>
+    <td><button class="btn btn-sm" onclick="approveTrainer('${d.id}')">Approve</button></td></tr>
+  `).join("");
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>Pending Trainer Approvals (${snap.size})</h3>
+      <table><tr><th>Name</th><th>Email</th><th></th></tr>
+      ${rows || '<tr><td colspan="3" class="muted">Koi pending approval nahi</td></tr>'}</table>
+    </div>
+  `;
+}
+async function approveTrainer(uid) {
+  await db.collection("users").doc(uid).update({ isApproved: true });
+  renderPending();
+  loadStats();
+}
+
+async function renderUsers() {
+  const snap = await db.collection("users").get();
+  let rows = snap.docs.map(d => {
+    const u = d.data();
+    return `<tr>
+      <td>${u.name}</td><td>${u.email}</td>
+      <td><span class="tag ${u.role === 'admin' ? 'tag-approved' : u.role === 'trainer' ? 'tag-published' : 'tag-pending'}">${u.role}</span></td>
+      <td>${u.role === 'trainer' ? (u.isApproved ? '✅ Approved' : '⏳ Pending') : '-'}</td>
+      <td>${u.role !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteUser('${d.id}')">Delete</button>` : ''}</td>
+    </tr>`;
+  }).join("");
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>All Users (${snap.size})</h3>
+      <table><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr>${rows}</table>
+    </div>
+  `;
+}
+async function deleteUser(uid) {
+  if (!confirm("Delete this user's profile? (Auth login record needs manual deletion in Firebase Console)")) return;
+  await db.collection("users").doc(uid).delete();
+  renderUsers();
+  loadStats();
+}
+
+async function renderCourses() {
+  const snap = await db.collection("courses").get();
+  let rows = "";
+  for (const doc of snap.docs) {
+    const c = doc.data();
+    const trainerDoc = await db.collection("users").doc(c.trainerId).get();
+    const trainerName = trainerDoc.exists ? trainerDoc.data().name : "Unknown";
+    rows += `<tr>
+      <td>${c.title}</td><td>${trainerName}</td>
+      <td><span class="tag ${c.published ? 'tag-published' : 'tag-pending'}">${c.published ? 'Published' : 'Draft'}</span></td>
+      <td>
+        <button class="btn btn-sm" onclick="togglePublish('${doc.id}', ${c.published})">${c.published ? 'Unpublish' : 'Publish'}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCourse('${doc.id}')">Delete</button>
+      </td>
+    </tr>`;
+  }
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>All Courses (${snap.size})</h3>
+      <table><tr><th>Title</th><th>Trainer</th><th>Status</th><th></th></tr>${rows}</table>
+    </div>
+  `;
+}
+async function togglePublish(courseId, current) {
+  await db.collection("courses").doc(courseId).update({ published: !current });
+  renderCourses();
+}
+async function deleteCourse(courseId) {
+  if (!confirm("Delete this course permanently?")) return;
+  await db.collection("courses").doc(courseId).delete();
+  renderCourses();
+  loadStats();
+}
+</script>
+</body>
+</html>

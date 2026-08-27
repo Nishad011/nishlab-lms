@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign Up | NISHLAB LMS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="auth-box">
+  <h1 class="center">Create Account</h1>
+  <div id="errorBox" class="hidden" style="background:#fee2e2;color:#991b1b;padding:10px;border-radius:8px;margin-bottom:14px;font-size:13px;"></div>
+  <label>Full Name</label>
+  <input type="text" id="name" placeholder="Your name">
+  <label>Email</label>
+  <input type="email" id="email" placeholder="you@example.com">
+  <label>Password</label>
+  <input type="password" id="password" placeholder="Min 6 characters">
+  <label>I am a</label>
+  <select id="role">
+    <option value="student">Student</option>
+    <option value="trainer">Trainer</option>
+  </select>
+  <p id="trainerNote" class="muted hidden">Trainer accounts need Admin approval before you can create courses.</p>
+  <button class="btn" style="width:100%;" onclick="doSignup()">Sign Up</button>
+  <p class="center muted" style="margin-top:16px;">Already have an account? <a href="login.html" style="color:var(--gold);font-weight:600;">Login</a></p>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+document.getElementById("role").addEventListener("change", (e) => {
+  document.getElementById("trainerNote").classList.toggle("hidden", e.target.value !== "trainer");
+});
+function showError(msg) {
+  const box = document.getElementById("errorBox");
+  box.textContent = msg;
+  box.classList.remove("hidden");
+}
+async function doSignup() {
+  const name = document.getElementById("name").value.trim();
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  const role = document.getElementById("role").value;
+  if (!name || !email || !password) return showError("Sab fields bharo.");
+  if (password.length < 6) return showError("Password kam se kam 6 characters ka ho.");
+  try {
+    const cred = await auth.createUserWithEmailAndPassword(email, password);
+    await db.collection("users").doc(cred.user.uid).set({
+      name, email, role,
+      isApproved: role === "student" ? true : false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    if (role === "trainer") {
+      alert("Account ban gaya! Admin approval ke baad aap courses bana paoge.");
+    }
+    redirectToDashboard(role);
+  } catch (e) {
+    showError(e.message);
+  }
+}
+</script>
+</body>
+</html>

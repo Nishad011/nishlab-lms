@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Student Dashboard | NISHLAB LMS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="navbar">
+  <div class="brand">NISHLAB LMS</div>
+  <div>
+    <span id="userName" style="color:var(--gold);font-weight:600;"></span>
+    <a href="#" onclick="logout()">Logout</a>
+  </div>
+</div>
+
+<div class="container">
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('my')" id="tabMy">My Courses</div>
+    <div class="tab" onclick="showTab('browse')" id="tabBrowse">Browse Courses</div>
+  </div>
+
+  <div id="viewMy">
+    <h2>My Courses</h2>
+    <div id="myCoursesGrid" class="grid"><div class="spinner"></div></div>
+  </div>
+
+  <div id="viewBrowse" class="hidden">
+    <h2>All Courses</h2>
+    <div id="allCoursesGrid" class="grid"><div class="spinner"></div></div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+let currentUser = null;
+
+requireRole(["student"], (user, data) => {
+  currentUser = user;
+  document.getElementById("userName").textContent = data.name;
+  loadMyCourses();
+  loadAllCourses();
+});
+
+function showTab(tab) {
+  document.getElementById("tabMy").classList.toggle("active", tab === "my");
+  document.getElementById("tabBrowse").classList.toggle("active", tab === "browse");
+  document.getElementById("viewMy").classList.toggle("hidden", tab !== "my");
+  document.getElementById("viewBrowse").classList.toggle("hidden", tab !== "browse");
+}
+
+async function loadMyCourses() {
+  const grid = document.getElementById("myCoursesGrid");
+  const enrollSnap = await db.collection("enrollments").where("studentId", "==", currentUser.uid).get();
+  if (enrollSnap.empty) {
+    grid.innerHTML = '<p class="muted">Abhi tak koi course enroll nahi kiya. "Browse Courses" tab se enroll karo.</p>';
+    return;
+  }
+  grid.innerHTML = "";
+  for (const enrollDoc of enrollSnap.docs) {
+    const enroll = enrollDoc.data();
+    const courseDoc = await db.collection("courses").doc(enroll.courseId).get();
+    if (!courseDoc.exists) continue;
+    const course = courseDoc.data();
+    const lessonsSnap = await db.collection("courses").doc(enroll.courseId).collection("lessons").get();
+    const totalLessons = lessonsSnap.size;
+    const completed = enroll.completedLessons ? enroll.completedLessons.length : 0;
+    const pct = totalLessons ? Math.round((completed / totalLessons) * 100) : 0;
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <h3>${course.title}</h3>
+      <p class="muted">${course.description || ""}</p>
+      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <p class="muted">${pct}% complete (${completed}/${totalLessons} lessons)</p>
+      <a href="course.html?id=${enroll.courseId}" class="btn btn-sm">Continue</a>
+    `;
+    grid.appendChild(card);
+  }
+}
+
+async function loadAllCourses() {
+  const grid = document.getElementById("allCoursesGrid");
+  const snap = await db.collection("courses").where("published", "==", true).get();
+  if (snap.empty) {
+    grid.innerHTML = '<p class="muted">Abhi koi course published nahi hai.</p>';
+    return;
+  }
+  const enrollSnap = await db.collection("enrollments").where("studentId", "==", currentUser.uid).get();
+  const enrolledIds = enrollSnap.docs.map(d => d.data().courseId);
+  grid.innerHTML = "";
+  snap.forEach(doc => {
+    const course = doc.data();
+    const isEnrolled = enrolledIds.includes(doc.id);
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <h3>${course.title}</h3>
+      <p class="muted">${course.description || ""}</p>
+      ${isEnrolled
+        ? '<span class="tag tag-approved">Already Enrolled</span>'
+        : `<button class="btn btn-sm" onclick="enroll('${doc.id}')">Enroll</button>`}
+    `;
+    grid.appendChild(card);
+  });
+}
+
+async function enroll(courseId) {
+  await db.collection("enrollments").add({
+    studentId: currentUser.uid,
+    courseId,
+    completedLessons: [],
+    enrolledAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  loadMyCourses();
+  loadAllCourses();
+  showTab("my");
+}
+</script>
+</body>
+</html>

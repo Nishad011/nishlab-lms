@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Course | NISHLAB LMS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="navbar">
+  <div class="brand">NISHLAB LMS</div>
+  <div>
+    <a href="student-dashboard.html">← Back to Dashboard</a>
+    <a href="#" onclick="logout()">Logout</a>
+  </div>
+</div>
+
+<div class="container">
+  <div id="content"><div class="spinner"></div></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+const params = new URLSearchParams(window.location.search);
+const courseId = params.get("id");
+let currentUser = null, userName = "", enrollDocId = null, enrollData = null, course = null, lessons = [], quiz = null, assignments = [];
+
+requireRole(["student"], async (user, data) => {
+  currentUser = user;
+  userName = data.name;
+  if (!courseId) { document.getElementById("content").innerHTML = "<p>Course not found.</p>"; return; }
+  await loadCourse();
+});
+
+async function loadCourse() {
+  const courseDoc = await db.collection("courses").doc(courseId).get();
+  if (!courseDoc.exists) { document.getElementById("content").innerHTML = "<p>Course not found.</p>"; return; }
+  course = courseDoc.data();
+
+  const enrollSnap = await db.collection("enrollments")
+    .where("studentId", "==", currentUser.uid)
+    .where("courseId", "==", courseId).get();
+  if (enrollSnap.empty) { document.getElementById("content").innerHTML = "<p>Aap enroll nahi hain is course mein.</p>"; return; }
+  enrollDocId = enrollSnap.docs[0].id;
+  enrollData = enrollSnap.docs[0].data();
+
+  const lessonsSnap = await db.collection("courses").doc(courseId).collection("lessons").orderBy("order").get();
+  lessons = lessonsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const quizSnap = await db.collection("courses").doc(courseId).collection("quiz").limit(1).get();
+  quiz = quizSnap.empty ? null : { id: quizSnap.docs[0].id, ...quizSnap.docs[0].data() };
+
+  const assignSnap = await db.collection("courses").doc(courseId).collection("assignments").get();
+  assignments = assignSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  render();
+  renderAssignments();
+}
+
+function render() {
+  const completed = enrollData.completedLessons || [];
+  const totalLessons = lessons.length;
+  const pct = totalLessons ? Math.round((completed.length / totalLessons) * 100) : 0;
+  const allDone = totalLessons > 0 && completed.length === totalLessons;
+
+  let lessonsHtml = lessons.map(l => `
+    <div class="lesson-row">
+      <input type="checkbox" ${completed.includes(l.id) ? "checked" : ""} onchange="toggleLesson('${l.id}', this.checked)">
+      <div style="flex:1;">
+        <strong>${l.title}</strong>
+        ${l.videoUrl ? `<br><a href="${l.videoUrl}" target="_blank" style="color:var(--navy);font-size:13px;">▶ Watch Video</a>` : ""}
+      </div>
+    </div>
+  `).join("");
+
+  let quizHtml = "";
+  if (allDone && quiz) {
+    quizHtml = enrollData.quizScore != null
+      ? `<div class="card"><h3>Quiz Result</h3><p>Score: ${enrollData.quizScore}/${quiz.questions.length}</p>${enrollData.quizScore >= Math.ceil(quiz.questions.length * 0.6) ? certificateButtonHtml() : "<p class='muted'>60% se kam score. Certificate ke liye pass karna zaroori hai.</p><button class=\"btn btn-sm\" onclick=\"renderQuiz()\">Retake Quiz</button>"}</div>`
+      : `<div class="card"><h3>Final Quiz</h3><p class="muted">Sab lessons complete! Ab quiz do certificate ke liye.</p><button class="btn" onclick="renderQuiz()">Start Quiz</button></div>`;
+  } else if (allDone && !quiz) {
+    quizHtml = `<div class="card">${certificateButtonHtml()}</div>`;
+  }
+
+  document.getElementById("content").innerHTML = `
+    <h1>${course.title}</h1>
+    <p class="muted">${course.description || ""}</p>
+    <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+    <p class="muted">${pct}% complete</p>
+    <div class="card">
+      <h3>Lessons</h3>
+      ${lessonsHtml || '<p class="muted">Is course mein abhi koi lesson nahi hai.</p>'}
+    </div>
+    ${quizHtml}
+    <div id="quizArea"></div>
+    <div id="assignmentsArea"></div>
+  `;
+}
+
+async function renderAssignments() {
+  if (!assignments.length) return;
+  let html = `<h2>Assignments</h2>`;
+  for (const a of assignments) {
+    const subSnap = await db.collection("courses").doc(courseId).collection("assignments").doc(a.id)
+      .collection("submissions").where("studentId", "==", currentUser.uid).limit(1).get();
+    const mySub = subSnap.empty ? null : { id: subSnap.docs[0].id, ...subSnap.docs[0].data() };
+    html += `
+      <div class="card">
+        <h3>${a.title}</h3>
+        <p class="muted">${a.description || ""}</p>
+        <p class="muted">Due: ${a.dueDate || "N/A"}</p>
+        ${mySub
+          ? `<p><strong>Submitted.</strong> ${mySub.grade != null ? `Grade: ${mySub.grade}/100` : "Grading pending."}</p>
+             <textarea id="subText_${a.id}" rows="2" placeholder="Update your answer/notes">${mySub.submissionText || ""}</textarea>
+             <input type="text" id="subLink_${a.id}" placeholder="Link (Drive/GitHub etc, optional)" value="${mySub.submissionLink || ""}">
+             <button class="btn btn-sm" onclick="submitAssignment('${a.id}','${mySub.id}')">Update Submission</button>`
+          : `<textarea id="subText_${a.id}" rows="2" placeholder="Your answer / notes"></textarea>
+             <input type="text" id="subLink_${a.id}" placeholder="Link (Drive/GitHub etc, optional)">
+             <button class="btn btn-sm" onclick="submitAssignment('${a.id}')">Submit</button>`}
+      </div>
+    `;
+  }
+  document.getElementById("assignmentsArea").innerHTML = html;
+}
+
+async function submitAssignment(assignmentId, existingSubId) {
+  const submissionText = document.getElementById(`subText_${assignmentId}`).value.trim();
+  const submissionLink = document.getElementById(`subLink_${assignmentId}`).value.trim();
+  const data = {
+    studentId: currentUser.uid,
+    studentName: userName,
+    submissionText, submissionLink,
+    submittedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const ref = db.collection("courses").doc(courseId).collection("assignments").doc(assignmentId).collection("submissions");
+  if (existingSubId) {
+    await ref.doc(existingSubId).update(data);
+  } else {
+    await ref.add(data);
+  }
+  alert("Submitted!");
+  renderAssignments();
+}
+
+function certificateButtonHtml() {
+  return `<button class="btn" onclick="downloadCertificate()">🎓 Download Certificate</button>`;
+}
+
+async function toggleLesson(lessonId, checked) {
+  let completed = enrollData.completedLessons || [];
+  if (checked && !completed.includes(lessonId)) completed.push(lessonId);
+  if (!checked) completed = completed.filter(id => id !== lessonId);
+  enrollData.completedLessons = completed;
+  await db.collection("enrollments").doc(enrollDocId).update({ completedLessons: completed });
+  render();
+}
+
+function renderQuiz() {
+  const area = document.getElementById("quizArea");
+  let html = `<div class="card"><h3>Quiz</h3>`;
+  quiz.questions.forEach((q, i) => {
+    html += `<div style="margin-bottom:16px;"><strong>${i + 1}. ${q.question}</strong>`;
+    q.options.forEach((opt, oi) => {
+      html += `<div><label style="font-weight:400;"><input type="radio" name="q${i}" value="${oi}" style="width:auto;display:inline;margin-right:6px;">${opt}</label></div>`;
+    });
+    html += `</div>`;
+  });
+  html += `<button class="btn" onclick="submitQuiz()">Submit Quiz</button></div>`;
+  area.innerHTML = html;
+}
+
+async function submitQuiz() {
+  let score = 0;
+  quiz.questions.forEach((q, i) => {
+    const selected = document.querySelector(`input[name="q${i}"]:checked`);
+    if (selected && parseInt(selected.value) === q.correctIndex) score++;
+  });
+  enrollData.quizScore = score;
+  await db.collection("enrollments").doc(enrollDocId).update({ quizScore: score });
+  render();
+}
+
+function downloadCertificate() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape" });
+  doc.setFillColor(7, 26, 58);
+  doc.rect(0, 0, 297, 210, "F");
+  doc.setDrawColor(244, 180, 0);
+  doc.setLineWidth(2);
+  doc.rect(10, 10, 277, 190);
+  doc.setTextColor(244, 180, 0);
+  doc.setFontSize(30);
+  doc.text("Certificate of Completion", 148, 60, { align: "center" });
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(16);
+  doc.text("This is to certify that", 148, 85, { align: "center" });
+  doc.setFontSize(26);
+  doc.text(userName, 148, 100, { align: "center" });
+  doc.setFontSize(16);
+  doc.text("has successfully completed the course", 148, 115, { align: "center" });
+  doc.setFontSize(20);
+  doc.text(course.title, 148, 130, { align: "center" });
+  doc.setFontSize(12);
+  doc.text("NISHLAB CREATIONS — " + new Date().toLocaleDateString(), 148, 160, { align: "center" });
+  doc.save(`Certificate-${course.title}.pdf`);
+}
+</script>
+</body>
+</html>

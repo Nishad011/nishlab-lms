@@ -46,9 +46,11 @@ function renderShell() {
     <span class="tag ${course.published ? 'tag-published' : 'tag-pending'}" id="statusTag">${course.published ? 'Published' : 'Draft'}</span>
     <button class="btn btn-sm" style="margin-left:10px;" onclick="togglePublish()">${course.published ? 'Unpublish' : 'Publish'}</button>
     <div class="tabs" style="margin-top:20px;">
-      <div class="tab active" id="tabL" onclick="showTab('lessons')">Lessons</div>
+      <div class="tab active" id="tabL" onclick="showTab('lessons')">Chapters</div>
+      <div class="tab" id="tabM" onclick="showTab('meets')">Live Classes</div>
       <div class="tab" id="tabQ" onclick="showTab('quiz')">Quiz</div>
       <div class="tab" id="tabA" onclick="showTab('assignments')">Assignments</div>
+      <div class="tab" id="tabPr" onclick="showTab('projects')">Projects</div>
       <div class="tab" id="tabS" onclick="showTab('students')">Students</div>
     </div>
     <div id="tabContent"></div>
@@ -56,11 +58,14 @@ function renderShell() {
 }
 
 function showTab(tab) {
-  ["L","Q","A","S"].forEach(t => document.getElementById("tab"+t).classList.remove("active"));
-  document.getElementById("tab" + tab[0].toUpperCase()).classList.add("active");
+  ["L","M","Q","A","Pr","S"].forEach(t => document.getElementById("tab"+t).classList.remove("active"));
+  const idMap = { lessons:"L", meets:"M", quiz:"Q", assignments:"A", projects:"Pr", students:"S" };
+  document.getElementById("tab" + idMap[tab]).classList.add("active");
   if (tab === "lessons") renderLessons();
+  if (tab === "meets") renderLiveClasses();
   if (tab === "quiz") renderQuizEditor();
   if (tab === "assignments") renderAssignments();
+  if (tab === "projects") renderProjects();
   if (tab === "students") renderStudents();
 }
 
@@ -104,6 +109,120 @@ async function deleteLesson(id) {
   if (!confirm("Delete this lesson?")) return;
   await db.collection("courses").doc(courseId).collection("lessons").doc(id).delete();
   renderLessons();
+}
+
+// ---------------- LIVE CLASSES (Schedule Meet) ----------------
+let enrolledStudentsCache = [];
+async function renderLiveClasses() {
+  const snap = await db.collection("courses").doc(courseId).collection("liveClasses").orderBy("date").orderBy("startTime").get();
+  const enrollSnap = await db.collection("enrollments").where("courseId", "==", courseId).get();
+  enrolledStudentsCache = [];
+  for (const e of enrollSnap.docs) {
+    const u = await db.collection("users").doc(e.data().studentId).get();
+    enrolledStudentsCache.push({ id: e.data().studentId, name: u.exists ? u.data().name : "Unknown" });
+  }
+  const studentCheckboxes = enrolledStudentsCache.map(s => `
+    <label style="font-weight:400;text-transform:none;letter-spacing:0;font-family:var(--font-body);font-size:13px;">
+      <input type="checkbox" class="mcStudent" value="${s.id}" style="width:auto;display:inline;margin-right:6px;" checked>${s.name}
+    </label>
+  `).join("<br>");
+
+  const now = new Date();
+  let rows = snap.docs.map(d => {
+    const c = d.data();
+    const start = new Date(`${c.date}T${c.startTime}`);
+    const end = new Date(`${c.date}T${c.endTime}`);
+    let statusTag = now < start ? '<span class="tag tag-upcoming">Upcoming</span>'
+      : now <= end ? '<span class="tag tag-live">Live Now</span>'
+      : '<span class="tag tag-ended">Ended</span>';
+    return `
+      <div class="class-row">
+        <strong>${c.topic}</strong> ${statusTag}
+        <p class="muted">${c.date} · ${c.startTime} – ${c.endTime} · ${(c.studentIds && c.studentIds.length) ? c.studentIds.length : enrolledStudentsCache.length} student(s)</p>
+        <p class="muted">Joining Link: <a href="${c.meetLink}" target="_blank">${c.meetLink}</a></p>
+        <label>Recording Link (add after class ends)</label>
+        <input type="text" id="rec_${d.id}" placeholder="Paste recording link" value="${c.recordingLink || ''}">
+        <button class="btn btn-sm" onclick="saveRecordingLink('${d.id}')">Save Recording Link</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteLiveClass('${d.id}')">Delete</button>
+      </div>
+    `;
+  }).join("");
+
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>Schedule Meet</h3>
+      <label>Topic Name</label><input type="text" id="mTopic" placeholder="e.g. Assembly & Exploded View">
+      <label>Date</label><input type="date" id="mDate">
+      <label>Time</label>
+      <div style="display:flex;gap:10px;">
+        <input type="time" id="mStart" style="flex:1;">
+        <input type="time" id="mEnd" style="flex:1;">
+      </div>
+      <label>Google Meet Link</label>
+      <input type="text" id="mLink" placeholder="Paste your Google Meet link (create it in Google Calendar, turn Record on when you start it)">
+      <p class="muted" style="margin-top:-8px;">Note: auto-recording is a Google Workspace host setting, not something this LMS can trigger — start the recording when you join the Meet.</p>
+      <label>Add Students</label>
+      <div style="max-height:140px;overflow-y:auto;border:1.5px solid var(--line);border-radius:6px;padding:10px;margin-bottom:14px;">
+        ${studentCheckboxes || '<p class="muted">No students enrolled yet.</p>'}
+      </div>
+      <button class="btn" onclick="scheduleLiveClass()">Schedule & Notify Students</button>
+    </div>
+    <h3>Scheduled Classes (${snap.size})</h3>
+    <div class="card">${rows || '<p class="muted">Koi class schedule nahi hui abhi.</p>'}</div>
+  `;
+}
+
+async function scheduleLiveClass() {
+  const topic = document.getElementById("mTopic").value.trim();
+  const date = document.getElementById("mDate").value;
+  const startTime = document.getElementById("mStart").value;
+  const endTime = document.getElementById("mEnd").value;
+  const meetLink = document.getElementById("mLink").value.trim();
+  const selected = Array.from(document.querySelectorAll(".mcStudent:checked")).map(cb => cb.value);
+  if (!topic || !date || !startTime || !endTime || !meetLink) return alert("Sab fields bharo (topic, date, time, meet link).");
+  if (!selected.length) return alert("Kam se kam ek student select karo.");
+
+  const isAllStudents = selected.length === enrolledStudentsCache.length;
+  const ref = await db.collection("courses").doc(courseId).collection("liveClasses").add({
+    topic, date, startTime, endTime, meetLink,
+    recordingLink: "",
+    studentIds: isAllStudents ? [] : selected, // empty = everyone enrolled
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+
+  await notifyStudents(selected, {
+    courseId, type: "class_scheduled",
+    title: `New Live Class: ${topic}`,
+    message: `${course.title} — ${date} at ${startTime}. Tap to see the joining link.`,
+    link: `course.html?id=${courseId}`
+  });
+
+  renderLiveClasses();
+}
+
+async function saveRecordingLink(classId) {
+  const recordingLink = document.getElementById(`rec_${classId}`).value.trim();
+  if (!recordingLink) return alert("Recording link paste karo.");
+  const classDoc = await db.collection("courses").doc(courseId).collection("liveClasses").doc(classId).get();
+  const c = classDoc.data();
+  await db.collection("courses").doc(courseId).collection("liveClasses").doc(classId).update({ recordingLink });
+
+  const targetIds = (c.studentIds && c.studentIds.length) ? c.studentIds : await getEnrolledStudentIds(courseId);
+  await notifyStudents(targetIds, {
+    courseId, type: "recording_available",
+    title: `Recording available: ${c.topic}`,
+    message: `${course.title} — recording ready hai. Tap to watch.`,
+    link: `course.html?id=${courseId}`
+  });
+
+  alert("Recording link saved & students notified!");
+  renderLiveClasses();
+}
+
+async function deleteLiveClass(classId) {
+  if (!confirm("Delete this scheduled class?")) return;
+  await db.collection("courses").doc(courseId).collection("liveClasses").doc(classId).delete();
+  renderLiveClasses();
 }
 
 // ---------------- QUIZ ----------------
@@ -205,7 +324,73 @@ async function createAssignment() {
   const dueDate = document.getElementById("aDue").value;
   if (!title) return alert("Title bharo.");
   await db.collection("courses").doc(courseId).collection("assignments").add({ title, description, dueDate });
+  const studentIds = await getEnrolledStudentIds(courseId);
+  await notifyStudents(studentIds, {
+    courseId, type: "assignment_created",
+    title: `New Assignment: ${title}`,
+    message: `${course.title} — due ${dueDate || 'no fixed date'}.`,
+    link: `course.html?id=${courseId}`
+  });
   renderAssignments();
+}
+
+// ---------------- PROJECTS ----------------
+async function renderProjects() {
+  const snap = await db.collection("courses").doc(courseId).collection("projects").get();
+  let cards = "";
+  for (const doc of snap.docs) {
+    const p = doc.data();
+    const subSnap = await db.collection("courses").doc(courseId).collection("projects").doc(doc.id).collection("submissions").get();
+    let subRows = subSnap.docs.map(s => {
+      const sub = s.data();
+      return `<tr>
+        <td>${sub.studentName}</td>
+        <td>${sub.submissionText ? sub.submissionText.slice(0,60) : ''} ${sub.submissionLink ? `<a href="${sub.submissionLink}" target="_blank">link</a>` : ''}</td>
+        <td><input type="number" id="pgrade_${s.id}" value="${sub.grade ?? ''}" style="width:70px;margin:0;" min="0" max="100"></td>
+        <td><button class="btn btn-sm" onclick="saveProjectGrade('${doc.id}','${s.id}')">Save</button></td>
+      </tr>`;
+    }).join("");
+    cards += `
+      <div class="card">
+        <h3>${p.title}</h3>
+        <p class="muted">${p.description}</p>
+        <p class="muted">Due: ${p.dueDate || 'N/A'}</p>
+        <table><tr><th>Student</th><th>Submission</th><th>Grade</th><th></th></tr>
+        ${subRows || '<tr><td colspan="4" class="muted">Koi submission nahi abhi</td></tr>'}</table>
+      </div>
+    `;
+  }
+  document.getElementById("tabContent").innerHTML = `
+    <div class="card">
+      <h3>Create Project</h3>
+      <label>Title</label><input type="text" id="pTitle">
+      <label>Description / Instructions</label><textarea id="pDesc" rows="3"></textarea>
+      <label>Due Date</label><input type="date" id="pDue">
+      <button class="btn" onclick="createProject()">Create Project</button>
+    </div>
+    ${cards || '<p class="muted">Koi project nahi bana abhi.</p>'}
+  `;
+}
+async function createProject() {
+  const title = document.getElementById("pTitle").value.trim();
+  const description = document.getElementById("pDesc").value.trim();
+  const dueDate = document.getElementById("pDue").value;
+  if (!title) return alert("Title bharo.");
+  await db.collection("courses").doc(courseId).collection("projects").add({ title, description, dueDate });
+  const studentIds = await getEnrolledStudentIds(courseId);
+  await notifyStudents(studentIds, {
+    courseId, type: "project_created",
+    title: `New Project: ${title}`,
+    message: `${course.title} — due ${dueDate || 'no fixed date'}.`,
+    link: `course.html?id=${courseId}`
+  });
+  renderProjects();
+}
+async function saveProjectGrade(projectId, subId) {
+  const grade = parseInt(document.getElementById(`pgrade_${subId}`).value);
+  await db.collection("courses").doc(courseId).collection("projects").doc(projectId)
+    .collection("submissions").doc(subId).update({ grade });
+  alert("Grade saved!");
 }
 async function saveGrade(assignmentId, subId) {
   const grade = parseInt(document.getElementById(`grade_${subId}`).value);

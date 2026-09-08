@@ -12,6 +12,10 @@
   <div>
     <a href="student-dashboard.html">← Back to Dashboard</a>
     <a href="#" onclick="logout()">Logout</a>
+    <span class="notif-wrap hidden" id="notifBell">
+      <span class="notif-bell" onclick="toggleNotifPanel()">🔔<span class="notif-badge hidden" id="notifBadge">0</span></span>
+      <div class="notif-panel hidden" id="notifPanel"><div id="notifList"></div></div>
+    </span>
   </div>
 </div>
 
@@ -27,11 +31,12 @@
 <script>
 const params = new URLSearchParams(window.location.search);
 const courseId = params.get("id");
-let currentUser = null, userName = "", enrollDocId = null, enrollData = null, course = null, lessons = [], quiz = null, assignments = [];
+let currentUser = null, userName = "", enrollDocId = null, enrollData = null, course = null, lessons = [], quiz = null, assignments = [], projects = [], liveClasses = [];
 
 requireRole(["student"], async (user, data) => {
   currentUser = user;
   userName = data.name;
+  initNotificationBell(user);
   if (!courseId) { document.getElementById("content").innerHTML = "<p>Course not found.</p>"; return; }
   await loadCourse();
 });
@@ -57,8 +62,18 @@ async function loadCourse() {
   const assignSnap = await db.collection("courses").doc(courseId).collection("assignments").get();
   assignments = assignSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+  const projectSnap = await db.collection("courses").doc(courseId).collection("projects").get();
+  projects = projectSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const classSnap = await db.collection("courses").doc(courseId).collection("liveClasses").orderBy("date").orderBy("startTime").get();
+  liveClasses = classSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(c => !c.studentIds || !c.studentIds.length || c.studentIds.includes(currentUser.uid));
+
   render();
+  renderLiveClasses();
   renderAssignments();
+  renderProjects();
 }
 
 function render() {
@@ -97,8 +112,82 @@ function render() {
     </div>
     ${quizHtml}
     <div id="quizArea"></div>
+    <div id="liveClassesArea"></div>
     <div id="assignmentsArea"></div>
+    <div id="projectsArea"></div>
   `;
+}
+
+function renderLiveClasses() {
+  const area = document.getElementById("liveClassesArea");
+  if (!area) return;
+  if (!liveClasses.length) { area.innerHTML = ""; return; }
+  const now = new Date();
+  let html = `<h2>Live Classes</h2>`;
+  liveClasses.forEach(c => {
+    const start = new Date(`${c.date}T${c.startTime}`);
+    const end = new Date(`${c.date}T${c.endTime}`);
+    const isLive = now >= start && now <= end;
+    const isPast = now > end;
+    const isUpcoming = now < start;
+    html += `
+      <div class="card">
+        <h3>${c.topic} ${isLive ? '<span class="tag tag-live">Live Now</span>' : isUpcoming ? '<span class="tag tag-upcoming">Upcoming</span>' : '<span class="tag tag-ended">Ended</span>'}</h3>
+        <p class="muted">${c.date} · ${c.startTime} – ${c.endTime}</p>
+        ${(isLive || isUpcoming) ? `<a href="${c.meetLink}" target="_blank" class="btn btn-sm">Join Class</a>` : ""}
+        ${isPast && c.recordingLink ? `<a href="${c.recordingLink}" target="_blank" class="btn btn-sm">▶ Watch Recording</a>` : ""}
+        ${isPast && !c.recordingLink ? `<p class="muted">Recording not uploaded yet.</p>` : ""}
+      </div>
+    `;
+  });
+  area.innerHTML = html;
+}
+
+async function renderProjects() {
+  const area = document.getElementById("projectsArea");
+  if (!area) return;
+  if (!projects.length) { area.innerHTML = ""; return; }
+  let html = `<h2>Projects</h2>`;
+  for (const p of projects) {
+    const subSnap = await db.collection("courses").doc(courseId).collection("projects").doc(p.id)
+      .collection("submissions").where("studentId", "==", currentUser.uid).limit(1).get();
+    const mySub = subSnap.empty ? null : { id: subSnap.docs[0].id, ...subSnap.docs[0].data() };
+    html += `
+      <div class="card">
+        <h3>${p.title}</h3>
+        <p class="muted">${p.description || ""}</p>
+        <p class="muted">Due: ${p.dueDate || "N/A"}</p>
+        ${mySub
+          ? `<p><strong>Submitted.</strong> ${mySub.grade != null ? `Grade: ${mySub.grade}/100` : "Grading pending."}</p>
+             <textarea id="psubText_${p.id}" rows="2" placeholder="Update your project notes">${mySub.submissionText || ""}</textarea>
+             <input type="text" id="psubLink_${p.id}" placeholder="Project link (Drive/GitHub etc)" value="${mySub.submissionLink || ""}">
+             <button class="btn btn-sm" onclick="submitProject('${p.id}','${mySub.id}')">Update Submission</button>`
+          : `<textarea id="psubText_${p.id}" rows="2" placeholder="Project notes"></textarea>
+             <input type="text" id="psubLink_${p.id}" placeholder="Project link (Drive/GitHub etc)">
+             <button class="btn btn-sm" onclick="submitProject('${p.id}')">Upload Project</button>`}
+      </div>
+    `;
+  }
+  area.innerHTML = html;
+}
+
+async function submitProject(projectId, existingSubId) {
+  const submissionText = document.getElementById(`psubText_${projectId}`).value.trim();
+  const submissionLink = document.getElementById(`psubLink_${projectId}`).value.trim();
+  const data = {
+    studentId: currentUser.uid,
+    studentName: userName,
+    submissionText, submissionLink,
+    submittedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const ref = db.collection("courses").doc(courseId).collection("projects").doc(projectId).collection("submissions");
+  if (existingSubId) {
+    await ref.doc(existingSubId).update(data);
+  } else {
+    await ref.add(data);
+  }
+  alert("Project submitted!");
+  renderProjects();
 }
 
 async function renderAssignments() {

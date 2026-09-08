@@ -12,6 +12,10 @@
   <div>
     <span id="userName" style="color:var(--gold);font-weight:600;"></span>
     <a href="#" onclick="logout()">Logout</a>
+    <span class="notif-wrap hidden" id="notifBell">
+      <span class="notif-bell" onclick="toggleNotifPanel()">🔔<span class="notif-badge hidden" id="notifBadge">0</span></span>
+      <div class="notif-panel hidden" id="notifPanel"><div id="notifList"></div></div>
+    </span>
   </div>
 </div>
 
@@ -42,6 +46,7 @@ let currentUser = null;
 requireRole(["student"], (user, data) => {
   currentUser = user;
   document.getElementById("userName").textContent = data.name;
+  initNotificationBell(user);
   loadMyCourses();
   loadAllCourses();
 });

@@ -45,6 +45,32 @@ service cloud.firestore {
                         || (isSignedIn() && resource.data.studentId == request.auth.uid);
         }
       }
+
+      match /projects/{projectId} {
+        allow read: if isSignedIn();
+        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
+
+        match /submissions/{subId} {
+          allow read: if isAdmin()
+                      || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid)
+                      || (isSignedIn() && resource.data.studentId == request.auth.uid);
+          allow create: if isSignedIn() && request.resource.data.studentId == request.auth.uid;
+          allow update: if isAdmin()
+                        || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid)
+                        || (isSignedIn() && resource.data.studentId == request.auth.uid);
+        }
+      }
+
+      match /liveClasses/{classId} {
+        allow read: if isSignedIn();
+        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
+      }
+    }
+
+    match /notifications/{notifId} {
+      allow read, update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn(); // trainers/admins write notifications for students via batch
+      allow delete: if isAdmin();
     }
 
     match /enrollments/{enrollId} {

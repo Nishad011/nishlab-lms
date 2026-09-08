@@ -141,3 +141,29 @@ table th{
 
 /* ---------- Stat cards (admin dashboard) ---------- */
 .stat-num{font-family:var(--font-mono);font-size:32px;font-weight:700;color:var(--navy);}
+
+/* ---------- Notification bell ---------- */
+.notif-wrap{position:relative;display:inline-block;margin-left:20px;}
+.notif-bell{cursor:pointer;color:#cdd6e6;font-size:18px;position:relative;user-select:none;}
+.notif-bell:hover{color:var(--gold);}
+.notif-badge{
+  position:absolute;top:-6px;right:-10px;background:var(--danger);color:#fff;
+  font-family:var(--font-mono);font-size:10px;font-weight:700;border-radius:10px;
+  padding:1px 6px;line-height:1.4;
+}
+.notif-panel{
+  position:absolute;top:32px;right:-10px;width:320px;max-height:400px;overflow-y:auto;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 10px 30px rgba(7,26,58,.18);z-index:50;text-align:left;
+}
+.notif-item{padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px;color:var(--ink);}
+.notif-item:hover{background:var(--paper);}
+.notif-unread{background:var(--pending-bg);}
+.notif-unread:hover{background:#fbe8c0;}
+
+/* ---------- Live classes ---------- */
+.tag-live{background:var(--danger-bg);color:var(--danger);}
+.tag-upcoming{background:#dbe7fb;color:var(--navy2);}
+.tag-ended{background:#eeece4;color:var(--muted);}
+.class-row{padding:14px 0;border-bottom:1px solid var(--line);}
+.class-row:last-child{border-bottom:none;}

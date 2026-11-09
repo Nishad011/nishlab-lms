@@ -115,16 +115,33 @@ B.auth.onChange(async function (u) {
 function showWho(p) {
   $("#who").hidden = false;
   $("#userName").textContent = p.name || p.email || "";
-  var rc = $("#roleChip"); rc.textContent = p.role; rc.className = "chip" + (p.role === "admin" ? " hot" : p.role === "trainer" ? " ok" : "");
+  $("#avatar").textContent = initials(p.name || p.email);
+  $("#roleChip").textContent = p.role === "admin" ? "Admin" : p.role === "trainer" ? "Trainer" : "Student";
   $("#signOut").onclick = function () { B.auth.signOut().then(function () { location.href = "index.html"; }); };
 }
+function initials(n) { var p = String(n || "?").trim().split(/[\s@.]+/).filter(Boolean); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+function firstName(n) { var f = String(n || "").trim().split(/\s+/)[0] || ""; return f.charAt(0).toUpperCase() + f.slice(1).toLowerCase(); }
+var IC = {
+  dash: '<path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"/>',
+  batch: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  book: '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="M8 7h8M8 11h6"/>',
+  people: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  award: '<circle cx="12" cy="9" r="6"/><path d="m8.2 13.8-1.7 7.7L12 19l5.5 2.5-1.7-7.7"/>',
+  user: '<path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  cal: '<rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  star: '<path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/>'
+};
+function ico(k) { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (IC[k] || "") + "</svg>"; }
 var NAV = {
-  student: [["#/", "01", "My courses"], ["#/certs", "02", "Certificates"], ["#/profile", "03", "Profile"]],
-  trainer: [["#/", "01", "My batches"], ["#/courses", "02", "Course content"], ["#/profile", "03", "Profile"]],
-  admin: [["#/", "01", "Overview"], ["#/batches", "02", "Batches"], ["#/courses", "03", "Courses"], ["#/people", "04", "People"], ["#/certs", "05", "Certificates"]]
+  student: [["#/", "dash", "Dashboard"], ["#/certs", "award", "Certificates"], ["#/profile", "user", "Profile"]],
+  trainer: [["#/", "dash", "Dashboard"], ["#/courses", "book", "Course content"], ["#/profile", "user", "Profile"]],
+  admin: [["#/", "dash", "Dashboard"], ["#/batches", "batch", "Batches"], ["#/courses", "book", "Courses"], ["#/people", "people", "People"], ["#/certs", "award", "Certificates"]]
 };
 function buildNav() {
-  $("#side").innerHTML = (NAV[ME.role] || NAV.student).map(function (n) { return '<a href="' + n[0] + '"><span>' + n[1] + "</span>" + esc(n[2]) + "</a>"; }).join("");
+  $("#side").innerHTML = (NAV[ME.role] || NAV.student).map(function (n) { return '<a href="' + n[0] + '">' + ico(n[1]) + "<span>" + esc(n[2]) + "</span></a>"; }).join("");
 }
 function markNav(h) {
   $$("#side a").forEach(function (a) {
@@ -159,6 +176,7 @@ async function route() {
     if (tok !== routeToken) return;
     if (typeof html === "string") view.innerHTML = html;
     if (fn.after) fn.after();
+    if (parts.length) refreshRail(false);
   } catch (e) {
     if (tok !== routeToken) return;
     view.innerHTML = '<div class="err-box">' + esc(friendly(e)) + '</div><p><a class="btn line sm" href="#/">Back</a></p>';
@@ -168,34 +186,311 @@ async function route() {
 function render(html, after) { view.innerHTML = html; if (after) after(); }
 
 /* ======================================================================
-   STUDENT
+   DASHBOARD (home screens, right rail, next-class countdown)
    ====================================================================== */
-async function studentHome() {
-  var res = await Promise.all([data.myBatches(), data.courses(), data.myCerts().catch(function () { return []; })]);
-  var batches = res[0], courses = res[1], certs = res[2];
-  var cmap = {}; courses.forEach(function (c) { cmap[c.id] = c; });
-  var head = '<div class="page-head"><div><p class="mono">Hello ' + esc((ME.name || "").split(" ")[0]) + '</p><h1>My courses</h1></div></div>';
-  if (!batches.length) {
-    return render(head + '<div class="empty"><h3>You are not in a batch yet</h3><p style="margin-top:8px">Once your fee is confirmed, the admin adds you to your batch and your course appears here.<br>Questions? WhatsApp <a href="https://wa.me/918424099617">+91 84240 99617</a>.</p></div>');
-  }
-  var cards = await Promise.all(batches.map(async function (b) {
-    var c = cmap[b.courseId] || { title: b.courseTitle || "Course", days: 0 };
-    var r = await Promise.all([data.sessions(b.id), data.progress(b.id)]);
-    var ses = r[0], prog = r[1][0], done = prog ? (prog.completedDays || []).length : 0;
-    var att = attendance(ME.uid, ses), nx = nextSession(ses);
-    var cert = certs.filter(function (x) { return x.batchId === b.id; })[0];
-    return '<a class="card course-card" href="#/b/' + esc(b.id) + '">' +
-      '<div class="row" style="justify-content:space-between"><span class="code">' + esc(c.code || "") + "</span>" + (b.status === "completed" ? chip("Completed", "ok") : chip("Running", "hot")) + "</div>" +
-      "<div><h3>" + esc(c.title) + '</h3><p class="small muted" style="margin-top:4px">' + esc(b.name) + (b.timing ? " · " + esc(b.timing) : "") + "</p></div>" +
-      '<div><div class="row small" style="justify-content:space-between;margin-bottom:6px"><span class="muted">Lessons done</span><span>' + done + " / " + (c.days || "?") + '</span></div><div class="bar"><i style="width:' + pct(done, c.days) + '%"></i></div></div>' +
-      '<div class="kv"><span>Attendance</span><span>' + (att.pct == null ? "No classes yet" : att.pct + "%") + "</span></div>" +
-      '<div class="kv"><span>Next class</span><span>' + (nx ? fmtDate(nx.date) + " · Day " + esc(nx.day) : "Not scheduled") + "</span></div>" +
-      (cert ? '<div class="kv"><span>Certificate</span><span class="hot">' + esc(cert.id) + "</span></div>" : "") +
-      "</a>";
+var DASH = null, CD_TIMER = null;
+var KCOL = ["#9b5cf6", "#ffa53a", "#4f9dff", "#ff3f8e", "#3ecf8e"];
+
+function parseTiming(t) {
+  var m = String(t || "").match(/(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*(?:(?:-|–|—|to)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?)?/i);
+  if (!m) return { h: 19, m: 0, mins: 60, known: false };
+  function hr(h, ap) { h = +h; ap = (ap || "").toLowerCase(); if (ap === "pm" && h < 12) h += 12; else if (ap === "am" && h === 12) h = 0; else if (!ap && h < 8) h += 12; return h; }
+  var h1 = hr(m[1], m[3] || m[6]), m1 = +(m[2] || 0), mins = 60;
+  if (m[4]) { var h2 = hr(m[4], m[6] || m[3]), e = h2 * 60 + +(m[5] || 0) - (h1 * 60 + m1); if (e > 0 && e <= 300) mins = e; }
+  return { h: h1, m: m1, mins: mins, known: true };
+}
+function eventOf(s, x) {
+  var t = parseTiming(x.b.timing), d = new Date((s.date || today()) + "T00:00:00");
+  d.setHours(t.h, t.m, 0, 0);
+  return { s: s, b: x.b, c: x.c, start: d, end: new Date(d.getTime() + t.mins * 60000), mins: t.mins, known: t.known };
+}
+function hm(d) { return d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true }).replace(" ", " "); }
+function durTxt(m) { return m >= 60 ? (m % 60 ? (m / 60).toFixed(1).replace(".0", "") : m / 60) + (m === 60 ? " hour" : " hours") : m + " mins"; }
+function tsDate(v) { if (!v) return null; if (v.toDate) return v.toDate(); if (v.seconds) return new Date(v.seconds * 1000); var d = new Date(v); return isNaN(d) ? null : d; }
+
+async function loadDash(force) {
+  if (DASH && !force && Date.now() - DASH.t < 60000) return DASH;
+  var r = await Promise.all([data.myBatches(), data.courses()]);
+  var cmap = {}; r[1].forEach(function (c) { cmap[c.id] = c; });
+  var admin = ME.role === "admin", student = ME.role === "student";
+  var list = r[0].slice().sort(function (a, b) { return (a.status === "completed") - (b.status === "completed"); }).slice(0, 20);
+  var per = await Promise.all(list.map(async function (b) {
+    var x = await Promise.all([
+      data.sessions(b.id).catch(function () { return []; }),
+      admin ? Promise.resolve([]) : data.submissions(b.id).catch(function () { return []; }),
+      student ? data.progress(b.id).catch(function () { return []; }) : Promise.resolve([])
+    ]);
+    return { b: b, c: cmap[b.courseId] || { title: b.courseTitle || "Course", days: 0 }, ses: x[0], subs: x[1], prog: x[2][0] || null };
   }));
-  return render(head + '<div class="cards">' + cards.join("") + "</div>");
+  var D = { t: Date.now(), list: per, courses: r[1], cmap: cmap, users: [], certs: [] };
+  if (admin) {
+    var a = await Promise.all([data.users(), DB.list("certificates"), DB.list("submissions").catch(function () { return []; })]);
+    D.users = a[0]; D.certs = a[1];
+    per.forEach(function (x) { x.subs = a[2].filter(function (s) { return s.batchId === x.b.id; }); });
+  } else if (student) {
+    D.certs = await data.myCerts().catch(function () { return []; });
+  }
+  D.events = [];
+  per.forEach(function (x) { x.ses.forEach(function (s) { if (s.date) D.events.push(eventOf(s, x)); }); });
+  D.events.sort(function (p, q) { return p.start - q.start; });
+  D.tasks = buildTasks(D);
+  DASH = D; return D;
 }
 
+function buildTasks(D) {
+  var T = [], t = today();
+  if (ME.role === "student") {
+    if (!D.list.length) T.push({ title: "Get added to your batch", tag: "#enrolment", note: "WhatsApp us", href: "https://wa.me/918424099617" });
+    D.list.forEach(function (x) {
+      var subs = {}; x.subs.forEach(function (s) { subs[s.key] = s; });
+      x.subs.filter(function (s) { return s.status === "redo"; }).forEach(function (s) {
+        T.push({ title: "Redo " + (s.key === "capstone" ? "capstone" : "Day " + s.key.slice(1)), tag: "#" + (x.c.code || "course").toLowerCase(), note: "Trainer asked", href: "#/b/" + x.b.id + (s.key === "capstone" ? "" : "/d/" + s.key.slice(1)) });
+      });
+      var held = x.ses.filter(function (s) { return (s.date || "") <= t; }).slice().reverse();
+      var seen = {};
+      held.forEach(function (s) {
+        var d = +s.day; if (!d || seen[d] || subs["d" + d]) return; seen[d] = 1;
+        T.push({ title: "Day " + d + " assignment", tag: "#" + (x.c.code || "course").toLowerCase(), note: s.date === t ? "Due today" : "Pending", href: "#/b/" + x.b.id + "/d/" + d });
+      });
+    });
+  } else {
+    if (ME.role === "admin") {
+      var pend = D.users.filter(function (u) { return u.role === "trainer" && !u.isApproved; }).length;
+      if (pend) T.push({ title: "Approve " + pend + " trainer" + (pend > 1 ? "s" : ""), tag: "#people", note: "Waiting", href: "#/people/trainers" });
+      var inAny = {}; D.list.forEach(function (x) { (x.b.studentIds || []).forEach(function (u) { inAny[u] = 1; }); });
+      var loose = D.users.filter(function (u) { return u.role === "student" && !inAny[u.id]; }).length;
+      if (loose) T.push({ title: loose + " student" + (loose > 1 ? "s" : "") + " not in a batch", tag: "#batches", note: "Add them", href: "#/people/students" });
+      if (!D.courses.length) T.push({ title: "Load the course syllabus", tag: "#courses", note: "One click", href: "#/courses" });
+    }
+    D.list.forEach(function (x) {
+      if (x.b.status === "completed") return;
+      var code = "#" + (x.c.code || "batch").toLowerCase();
+      var due = x.subs.filter(function (s) { return s.status === "submitted"; }).length;
+      if (due) T.push({ title: "Review " + due + " submission" + (due > 1 ? "s" : ""), tag: code, note: x.b.name, href: "#/b/" + x.b.id + "/work" });
+      var n = (x.b.studentIds || []).length;
+      x.ses.filter(function (s) { return (s.date || "") <= t && n && !(s.present || []).length; }).slice(-2).forEach(function (s) {
+        T.push({ title: "Mark attendance · Day " + s.day, tag: code, note: fmtDate(s.date), href: "#/b/" + x.b.id + "/classes" });
+      });
+      if (ME.role === "admin" && !x.b.trainerId) T.push({ title: "Assign a trainer", tag: code, note: x.b.name, href: "#/b/" + x.b.id + "/settings" });
+      if (!x.ses.some(function (s) { return (s.date || "") >= t; })) T.push({ title: "Schedule next class", tag: code, note: x.b.name, href: "#/b/" + x.b.id + "/classes" });
+    });
+  }
+  return T;
+}
+
+/* ---------- right rail ---------- */
+async function refreshRail(force) {
+  try { var D = await loadDash(force); renderRail(D); renderSideCard(D); } catch (e) { console.error(e); }
+}
+function klassCard(ev, i, withJoin) {
+  var meet = ev.s.meetLink || ev.b.meetLink;
+  var who = ME.role === "student" ? (ev.b.trainerName || "NISHLAB mentor") : ev.b.name;
+  var href = ME.role === "student" ? "#/b/" + ev.b.id + "/d/" + ev.s.day : "#/b/" + ev.b.id + "/classes";
+  return '<div class="klass" style="--k:' + KCOL[i % KCOL.length] + '"><a href="' + esc(href) + '" style="text-decoration:none"><h4>' + esc(ev.c.code || "") + " · Day " + esc(ev.s.day) + '</h4><p class="small muted" style="margin-top:2px">' + esc(ev.s.topic || ev.c.title || "") + "</p></a>" +
+    '<div class="meta"><span>' + ico("user") + esc(who) + "</span><span>" + ico("clock") + durTxt(ev.mins) + "</span></div>" +
+    (withJoin && isUrl(meet) ? '<a class="btn sm" href="' + esc(meet) + '" target="_blank" rel="noopener">Join class</a>' : "") + "</div>";
+}
+function renderRail(D) {
+  var now = new Date(), t = today();
+  var todays = D.events.filter(function (e) { return e.s.date === t; });
+  var html = '<section><div class="rail-h"><div><h2>Your classes</h2><p>Today, ' + now.toLocaleDateString("en-IN", { day: "numeric", month: "short" }).toUpperCase() + '</p></div><a href="#/" aria-label="Dashboard">' + ico("cal") + "</a></div>";
+  if (todays.length) {
+    var nowPlaced = false, rows = [];
+    todays.forEach(function (e, i) {
+      if (!nowPlaced && now < e.start) { rows.push('<div class="now"><b>' + hm(now) + "</b><i></i></div>"); nowPlaced = true; }
+      rows.push('<div class="slot"><time>' + (e.known ? hm(e.start) : "Today") + "</time>" + klassCard(e, i, now < e.end && now > new Date(e.start.getTime() - 3600000)) + "</div>");
+    });
+    if (!nowPlaced) rows.push('<div class="now"><b>' + hm(now) + "</b><i></i></div>");
+    html += '<div class="sched">' + rows.join("") + "</div>";
+  } else {
+    var up = D.events.filter(function (e) { return e.end > now; }).slice(0, 2);
+    html += '<div class="rail-empty">No class today.' + (up.length ? " Coming up:" : ME.role === "student" ? " Your trainer will schedule the next one." : " Add a class from a batch.") + "</div>" +
+      (up.length ? '<div class="sched">' + up.map(function (e, i) { return '<div class="slot"><time>' + e.start.toLocaleDateString("en-IN", { day: "numeric", month: "short" }) + "</time>" + klassCard(e, i + 1, false) + "</div>"; }).join("") + "</div>" : "");
+  }
+  html += "</section>";
+  var T = D.tasks;
+  html += '<section><div class="rail-h"><h2>Daily tasks <small class="muted" style="font-size:.78rem;font-weight:500;margin-left:6px">' + T.length + " result" + (T.length === 1 ? "" : "s") + "</small></h2></div>" +
+    (T.length ? '<div class="tasks">' + T.slice(0, 4).map(function (k) {
+      var ext = /^https?:/.test(k.href);
+      return '<a class="task" href="' + esc(k.href) + '"' + (ext ? ' target="_blank" rel="noopener"' : "") + "><div><b>" + esc(k.title) + "</b><small>" + esc(k.tag) + "</small></div><span>" + esc(k.note) + "</span></a>";
+    }).join("") + "</div>" + (T.length > 4 ? '<p class="small muted" style="margin-top:10px">+' + (T.length - 4) + " more on your dashboard</p>" : "")
+      : '<div class="rail-empty">All caught up. Nothing pending.</div>') + "</section>";
+  $("#railBody").innerHTML = html;
+  var bell = $("#bell"); if (T.length) bell.setAttribute("data-dot", ""); else bell.removeAttribute("data-dot");
+  bell.setAttribute("aria-label", T.length + " pending tasks");
+}
+function renderSideCard(D) {
+  var el = $("#sideCard"), now = new Date();
+  var nx = D.events.filter(function (e) { return e.end > now; })[0];
+  if (CD_TIMER) { clearInterval(CD_TIMER); CD_TIMER = null; }
+  el.hidden = false;
+  if (!nx) { el.innerHTML = "<p>No upcoming class yet.</p>" + (ME.role !== "student" && D.list[0] ? '<a class="btn sm block" href="#/b/' + esc(D.list[0].b.id) + '/classes">Add a class</a>' : '<p class="small" style="opacity:.85;margin-top:6px;font-weight:400">You will see a countdown here once it is scheduled.</p>'); return; }
+  var meet = nx.s.meetLink || nx.b.meetLink;
+  function draw() {
+    var ms = nx.start - new Date();
+    if (ms <= 0) { el.innerHTML = "<p>" + esc(nx.c.code || "") + " Day " + esc(nx.s.day) + " is live now</p>" + (isUrl(meet) ? '<a class="btn sm block" href="' + esc(meet) + '" target="_blank" rel="noopener">Join class</a>' : ""); return; }
+    var m = Math.floor(ms / 60000), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+    function u(v, l) { var s = String(Math.min(v, 99)).padStart(2, "0"); return '<div class="u"><div><i>' + s[0] + "</i><i>" + s[1] + "</i></div><span>" + l + "</span></div>"; }
+    el.innerHTML = "<p>Next class: " + esc(nx.c.code || "") + " Day " + esc(nx.s.day) + "</p>" + '<div class="cd" aria-label="Starts in ' + d + " days " + h + " hours " + mm + ' minutes">' + u(d, "DAYS") + "<b>:</b>" + u(h, "HOURS") + "<b>:</b>" + u(mm, "MINUTES") + "</div>";
+  }
+  draw(); CD_TIMER = setInterval(draw, 30000);
+}
+
+/* ---------- home building blocks ---------- */
+function weekBuckets(n) {
+  var d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  var out = []; for (var i = n - 1; i >= 0; i--) { var s = new Date(d); s.setDate(s.getDate() - i * 7); out.push(s); } return out;
+}
+function bucketIdx(weeks, dt) { if (!dt) return -1; for (var i = weeks.length - 1; i >= 0; i--) if (dt >= weeks[i]) return (i === weeks.length - 1 || dt < weeks[i + 1]) ? i : -1; return -1; }
+function smooth(pts) {
+  if (!pts.length) return "";
+  var d = "M" + pts[0][0] + "," + pts[0][1];
+  for (var i = 0; i < pts.length - 1; i++) {
+    var p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+    d += " C" + (p1[0] + (p2[0] - p0[0]) / 6).toFixed(1) + "," + (p1[1] + (p2[1] - p0[1]) / 6).toFixed(1) + " " + (p2[0] - (p3[0] - p1[0]) / 6).toFixed(1) + "," + (p2[1] - (p3[1] - p1[1]) / 6).toFixed(1) + " " + p2[0] + "," + p2[1];
+  }
+  return d;
+}
+function progressChart(D, title) {
+  var weeks = weekBuckets(8), A = weeks.map(function () { return 0; }), Bv = A.slice(), now = new Date();
+  var student = ME.role === "student";
+  D.events.forEach(function (e) {
+    if (e.start > now) return;
+    if (student && (e.s.present || []).indexOf(ME.uid) < 0) return;
+    var i = bucketIdx(weeks, e.start); if (i >= 0) A[i]++;
+  });
+  D.list.forEach(function (x) { x.subs.forEach(function (s) { var i = bucketIdx(weeks, tsDate(s.submittedAt)); if (i >= 0) Bv[i]++; }); });
+  var W = 640, H = 230, L = 34, R = 14, T = 14, Bt = 30, max = Math.max(4, Math.max.apply(null, A.concat(Bv)));
+  max = Math.ceil(max / 4) * 4;
+  var x = function (i) { return L + i * (W - L - R) / (weeks.length - 1); }, y = function (v) { return T + (H - T - Bt) * (1 - v / max); };
+  var pa = A.map(function (v, i) { return [+x(i).toFixed(1), +y(v).toFixed(1)]; }), pb = Bv.map(function (v, i) { return [+x(i).toFixed(1), +y(v).toFixed(1)]; });
+  var grid = "";
+  for (var g = 0; g <= 4; g++) { var gv = max * g / 4; grid += '<text x="' + (L - 10) + '" y="' + (y(gv) + 4) + '" text-anchor="end" font-size="11" fill="#9b9ecf">' + gv + "</text>"; }
+  weeks.forEach(function (w, i) {
+    grid += '<line x1="' + x(i) + '" x2="' + x(i) + '" y1="' + T + '" y2="' + (H - Bt) + '" stroke="rgba(255,255,255,.08)"/>' +
+      '<text x="' + x(i) + '" y="' + (H - 8) + '" text-anchor="middle" font-size="11" fill="#9b9ecf">' + w.toLocaleDateString("en-IN", { day: "numeric", month: "short" }).toUpperCase() + "</text>";
+  });
+  var la = smooth(pa), last = pa[pa.length - 1];
+  var lab = student ? ["Classes attended", "Assignments sent"] : ["Classes held", "Submissions"];
+  var total = A.reduce(function (s, v) { return s + v; }, 0) + Bv.reduce(function (s, v) { return s + v; }, 0);
+  return '<section class="panel"><div class="panel-h"><h2>' + esc(title) + '<small>last 8 weeks</small></h2></div><div class="chart-wrap">' +
+    '<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="' + esc(lab[0] + ": " + A.join(", ") + ". " + lab[1] + ": " + Bv.join(", ")) + '">' +
+    '<defs><linearGradient id="ga" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff3f8e" stop-opacity=".45"/><stop offset="1" stop-color="#ff3f8e" stop-opacity="0"/></linearGradient></defs>' + grid +
+    '<path d="' + la + " L" + last[0] + "," + (H - Bt) + " L" + pa[0][0] + "," + (H - Bt) + ' Z" fill="url(#ga)"/>' +
+    '<path d="' + smooth(pb) + '" fill="none" stroke="#4f9dff" stroke-width="2.5" stroke-linecap="round"/>' +
+    '<path d="' + la + '" fill="none" stroke="#ff3f8e" stroke-width="3" stroke-linecap="round"/>' +
+    '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="6" fill="#ff3f8e" stroke="#fff" stroke-width="2"/></svg>' +
+    '<div class="legend"><span><i style="background:#ff3f8e"></i>' + lab[0] + '</span><span><i style="background:#4f9dff"></i>' + lab[1] + "</span></div></div>" +
+    (total ? "" : '<p class="small muted" style="margin-top:6px">Your chart fills up as classes are held and work is submitted.</p>') + "</section>";
+}
+function heroArt() {
+  function gear(cx, cy, r, n, depth) {
+    var d = "", st = Math.PI * 2 / n;
+    for (var i = 0; i < n; i++) {
+      var a = i * st, pts = [[a - st * .27, r], [a - st * .17, r + depth], [a + st * .17, r + depth], [a + st * .27, r], [a + st * .73, r]];
+      pts.forEach(function (p, j) { d += (i === 0 && j === 0 ? "M" : "L") + (cx + Math.cos(p[0]) * p[1]).toFixed(1) + "," + (cy + Math.sin(p[0]) * p[1]).toFixed(1); });
+    }
+    return d + "Z";
+  }
+  return '<svg class="art" viewBox="0 0 320 230" aria-hidden="true"><defs>' +
+    '<linearGradient id="hg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#ff8a4c"/></linearGradient>' +
+    '<linearGradient id="hg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff86c0"/><stop offset="1" stop-color="#c94bf0"/></linearGradient>' +
+    '<linearGradient id="hg3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5fb4ff"/><stop offset="1" stop-color="#3d63e8"/></linearGradient>' +
+    '<radialGradient id="hg4" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#bfe3ff"/><stop offset="1" stop-color="#4f7dff"/></radialGradient></defs>' +
+    '<ellipse cx="170" cy="206" rx="132" ry="18" fill="#2a1f66" opacity=".55"/>' +
+    '<g transform="translate(84 58) rotate(-8)"><rect width="150" height="112" rx="8" fill="url(#hg3)"/>' +
+    '<g stroke="rgba(255,255,255,.22)" stroke-width="1">' + [18, 36, 54, 72, 90].map(function (v) { return '<line x1="0" x2="150" y1="' + v + '" y2="' + v + '"/>'; }).join("") + [25, 50, 75, 100, 125].map(function (v) { return '<line y1="0" y2="112" x1="' + v + '" x2="' + v + '"/>'; }).join("") + "</g>" +
+    '<path d="M22 86 L22 30 L70 30 L70 54 L118 54 L118 86 Z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><circle cx="46" cy="58" r="10" fill="none" stroke="#fff" stroke-width="2.4"/><circle cx="98" cy="70" r="6" fill="none" stroke="#fff" stroke-width="2"/></g>' +
+    '<path d="' + gear(232, 150, 34, 12, 9) + '" fill="url(#hg2)"/><circle cx="232" cy="150" r="14" fill="#5b3eb6"/><circle cx="232" cy="150" r="6" fill="#ffd1ea"/>' +
+    '<path d="' + gear(282, 104, 18, 9, 6) + '" fill="url(#hg1)"/><circle cx="282" cy="104" r="7" fill="#5b3eb6"/>' +
+    '<g transform="translate(70 22)"><circle cx="0" cy="0" r="7" fill="#fff"/><path d="M-3 4 L-30 104 M3 4 L26 104" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M-16 54 Q0 64 13 54" stroke="#fff" stroke-width="3" fill="none"/><path d="M26 104 l4 14 l-9 -6 z" fill="url(#hg1)"/></g>' +
+    '<circle cx="40" cy="172" r="22" fill="url(#hg4)"/><ellipse cx="40" cy="172" rx="34" ry="8" fill="none" stroke="#ffd27a" stroke-width="2.5" transform="rotate(-18 40 172)"/>' +
+    '<path d="M270 30 l4 10 l10 4 l-10 4 l-4 10 l-4 -10 l-10 -4 l10 -4 z" fill="#fff" opacity=".9"/><circle cx="296" cy="64" r="3" fill="#fff" opacity=".7"/><circle cx="24" cy="110" r="3" fill="#ffd27a"/></svg>';
+}
+function helloHead(sub) {
+  return '<header class="hello"><div><h1>Hello ' + esc(firstName(ME.name) || "there") + "!</h1><p>" + esc(sub) + '</p></div><span class="date">' + ico("cal") + new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" }) + "</span></header>";
+}
+function hero(title, text, btns) {
+  return '<section class="hero"><div><h2>' + esc(title) + "</h2><p>" + text + '</p><div class="row">' + btns + "</div></div>" + heroArt() + "</section>";
+}
+function courseCardHtml(x, student) {
+  var c = x.c, b = x.b, total = c.days || 0, done, label, facts, go;
+  if (student) {
+    done = x.prog ? (x.prog.completedDays || []).length : 0;
+    var att = attendance(ME.uid, x.ses);
+    facts = [["book", total + " Lessons"], ["clock", (c.hours || "–") + " Hours"], ["batch", (b.studentIds || []).length + " in batch"], ["check", (att.pct == null ? "–" : att.pct + "%") + " attendance"]];
+    go = "View Course";
+  } else {
+    var days = {}; x.ses.filter(function (s) { return (s.date || "") <= today(); }).forEach(function (s) { days[s.day] = 1; });
+    done = Object.keys(days).length;
+    var due = x.subs.filter(function (s) { return s.status === "submitted"; }).length;
+    facts = [["book", total + " Days"], ["clock", (c.hours || "–") + " Hours"], ["batch", (b.studentIds || []).length + ((b.studentIds || []).length === 1 ? " Student" : " Students")], ["list", due + " to review"]];
+    go = "Open batch";
+  }
+  var p = pct(done, total);
+  return '<a class="ccard" href="#/b/' + esc(b.id) + '"><div class="top"><div class="row"><h3>' + esc(student ? c.title : b.name) + '</h3><span class="code">' + esc(c.code || "") + "</span></div>" +
+    '<div class="by"><span class="avatar sm">' + esc(initials(b.trainerName || "N")) + "</span>" + esc(student ? (b.trainerName || "NISHLAB mentor") : (c.title || "") + (b.trainerName ? " · " + b.trainerName : "")) + "</div></div>" +
+    '<div class="facts">' + facts.map(function (f) { return "<span>" + ico(f[0]) + esc(f[1]) + "</span>"; }).join("") + "</div>" +
+    '<div class="prog"><span>' + done + "/" + total + '</span><div class="bar"><i style="width:' + p + '%"></i></div><span>' + p + "%</span></div>" +
+    '<span class="go">' + go + "</span></a>";
+}
+
+/* ---------- the three home screens ---------- */
+async function studentHome() {
+  var D = await loadDash(true); renderRail(D); renderSideCard(D);
+  var now = new Date(), nx = D.events.filter(function (e) { return e.end > now; })[0];
+  var cur = D.list.filter(function (x) { return x.b.status !== "completed"; })[0] || D.list[0];
+  var btns = "", text;
+  if (nx) {
+    var meet = nx.s.meetLink || nx.b.meetLink;
+    text = "Next class: <b>" + esc(nx.c.code || "") + " Day " + esc(nx.s.day) + "</b>" + (nx.s.topic ? " · " + esc(nx.s.topic) : "") + "<br>" + nx.start.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" }) + (nx.known ? ", " + hm(nx.start) : "");
+    if (isUrl(meet)) btns += '<a class="btn coral" href="' + esc(meet) + '" target="_blank" rel="noopener">Join live class</a>';
+    btns += '<a class="btn line" href="#/b/' + esc(nx.b.id) + "/d/" + esc(nx.s.day) + '" style="color:#fff">Open Day ' + esc(nx.s.day) + "</a>";
+  } else if (cur) {
+    var dn = cur.prog ? (cur.prog.completedDays || []) : [], nd = 1; while (dn.indexOf(nd) >= 0) nd++;
+    text = "Watch the lessons, practise every day and send your work. Your trainer reviews each submission.";
+    btns = '<a class="btn coral" href="#/b/' + esc(cur.b.id) + "/d/" + Math.min(nd, cur.c.days || nd) + '">Continue Day ' + Math.min(nd, cur.c.days || nd) + "</a>";
+  } else {
+    text = "Once your fee is confirmed, the admin adds you to your batch and your course appears here.";
+    btns = '<a class="btn coral" href="https://wa.me/918424099617" target="_blank" rel="noopener">WhatsApp us</a>';
+  }
+  var html = helloHead("Welcome back, keep building every day.") + hero("Draw it. Model it. Simulate it.", text, btns) + progressChart(D, "Your progress") +
+    '<div class="sec-h"><h2>Your courses<small>' + D.list.length + " result" + (D.list.length === 1 ? "" : "s") + "</small></h2>" + (D.certs.length ? '<a href="#/certs">My certificates</a>' : "") + "</div>" +
+    (D.list.length ? '<div class="ccards">' + D.list.map(function (x) { return courseCardHtml(x, true); }).join("") + "</div>" : '<div class="empty">You are not in a batch yet. Questions? WhatsApp <a href="https://wa.me/918424099617">+91 84240 99617</a>.</div>');
+  return render(html);
+}
+
+async function trainerHome() {
+  var D = await loadDash(true); renderRail(D); renderSideCard(D);
+  var now = new Date(), nx = D.events.filter(function (e) { return e.end > now; })[0];
+  var todayN = D.events.filter(function (e) { return e.s.date === today(); }).length;
+  var text = (todayN ? "You have <b>" + todayN + " class" + (todayN > 1 ? "es" : "") + "</b> today. " : "") + "After each class, tick attendance and paste the recording link so students can revise.";
+  var btns = nx ? '<a class="btn coral" href="#/b/' + esc(nx.b.id) + '/classes">Open ' + esc(nx.c.code || "") + " Day " + esc(nx.s.day) + "</a>" : (D.list[0] ? '<a class="btn coral" href="#/b/' + esc(D.list[0].b.id) + '/classes">Add a class</a>' : "");
+  btns += '<a class="btn line" href="#/courses" style="color:#fff">Course content</a>';
+  var html = helloHead("Here is what your batches need today.") + hero("Teach it once. Make it stick.", text, btns) + progressChart(D, "Batch activity") +
+    '<div class="sec-h"><h2>Your batches<small>' + D.list.length + " result" + (D.list.length === 1 ? "" : "s") + "</small></h2></div>" +
+    (D.list.length ? '<div class="ccards">' + D.list.map(function (x) { return courseCardHtml(x, false); }).join("") + "</div>" : '<div class="empty">No batch is assigned to you yet. The admin assigns trainers to batches.</div>');
+  return render(html);
+}
+
+async function adminHome() {
+  var D = await loadDash(true); renderRail(D); renderSideCard(D);
+  var st = D.users.filter(function (u) { return u.role === "student"; }).length;
+  var tr = D.users.filter(function (u) { return u.role === "trainer" && u.isApproved; }).length;
+  var running = D.list.filter(function (x) { return x.b.status !== "completed"; });
+  var text = "<b>" + st + "</b> students · <b>" + running.length + "</b> running batch" + (running.length === 1 ? "" : "es") + " · <b>" + tr + "</b> trainer" + (tr === 1 ? "" : "s") + " · <b>" + D.certs.length + "</b> certificate" + (D.certs.length === 1 ? "" : "s");
+  var btns = '<a class="btn coral" href="#/batches">New batch</a><a class="btn line" href="#/people" style="color:#fff">Copy sign-up link</a>';
+  var html = helloHead("Here is how NISHLAB is doing today.") + hero("Run every batch from one place.", text, btns) +
+    (!D.courses.length ? '<div class="card next" style="margin-top:20px"><div><h3>Start here: load the course syllabus</h3><p class="muted small" style="margin-top:4px">Creates AutoCAD, SolidWorks and ANSYS with every day from your website syllabus.</p></div><a class="btn" href="#/courses">Load syllabus</a></div>' : "") +
+    progressChart(D, "Institute activity") +
+    '<div class="sec-h"><h2>Running batches<small>' + running.length + " result" + (running.length === 1 ? "" : "s") + '</small></h2><a href="#/batches">View all</a></div>' +
+    (running.length ? '<div class="ccards">' + running.map(function (x) { return courseCardHtml(x, false); }).join("") + "</div>" : '<div class="empty">No running batch. <a href="#/batches">Create one</a>.</div>');
+  return render(html);
+}
+
+/* ======================================================================
+   STUDENT
+   ====================================================================== */
 async function loadStudentBatch(bid) {
   var b = await DB.get("batches/" + bid);
   if (!b) throw new Error("This batch was not found or you are not in it.");
@@ -322,13 +617,6 @@ async function profileView() {
 /* ======================================================================
    TRAINER + ADMIN
    ====================================================================== */
-async function trainerHome() {
-  var res = await Promise.all([data.myBatches(), data.courses()]), batches = res[0], cmap = {};
-  res[1].forEach(function (c) { cmap[c.id] = c; });
-  return render('<div class="page-head"><div><p class="mono">Trainer</p><h1>My batches</h1><p>Add classes, mark attendance and review student work.</p></div></div>' +
-    (batches.length ? '<div class="cards">' + batches.map(function (b) { return batchCard(b, cmap[b.courseId]); }).join("") + "</div>" :
-      '<div class="empty">No batch is assigned to you yet. The admin assigns trainers to batches.</div>'));
-}
 function batchCard(b, c) {
   c = c || {};
   return '<a class="card course-card" href="#/b/' + esc(b.id) + '"><div class="row" style="justify-content:space-between"><span class="code">' + esc(c.code || "") + "</span>" + (b.status === "completed" ? chip("Completed", "ok") : chip("Running", "hot")) + "</div>" +
@@ -336,24 +624,6 @@ function batchCard(b, c) {
     '<div class="kv"><span>Students</span><span>' + (b.studentIds || []).length + "</span></div>" +
     '<div class="kv"><span>Trainer</span><span>' + esc(b.trainerName || "Not assigned") + "</span></div>" +
     '<div class="kv"><span>Timing</span><span>' + esc(b.timing || "–") + "</span></div></a>";
-}
-
-async function adminHome() {
-  var res = await Promise.all([data.users(), DB.list("batches"), data.courses(), DB.list("certificates")]);
-  var users = res[0], batches = res[1], courses = res[2], certs = res[3], cmap = {};
-  courses.forEach(function (c) { cmap[c.id] = c; });
-  var pending = users.filter(function (u) { return u.role === "trainer" && !u.isApproved; });
-  var running = batches.filter(function (b) { return b.status !== "completed"; });
-  var html = '<div class="page-head"><div><p class="mono">Admin</p><h1>Overview</h1></div><a class="btn" href="#/batches">New batch</a></div>' +
-    '<div class="stats"><div class="stat"><b>' + users.filter(function (u) { return u.role === "student"; }).length + '</b><span>students</span></div>' +
-    '<div class="stat"><b>' + running.length + '</b><span>running batches</span></div>' +
-    '<div class="stat"><b>' + users.filter(function (u) { return u.role === "trainer" && u.isApproved; }).length + '</b><span>trainers</span></div>' +
-    '<div class="stat"><b>' + certs.length + '</b><span>certificates</span></div></div>' +
-    (!courses.length ? '<div class="card next" style="margin-bottom:14px"><div><h3>Start here: load the course syllabus</h3><p class="muted small" style="margin-top:4px">Creates AutoCAD, SolidWorks and ANSYS with every day from your website syllabus.</p></div><a class="btn" href="#/courses">Load syllabus</a></div>' : "") +
-    (pending.length ? '<div class="card next" style="margin-bottom:14px;border-left-color:var(--warn)"><div><h3>' + pending.length + ' trainer' + (pending.length > 1 ? "s" : "") + ' waiting for approval</h3><p class="muted small" style="margin-top:4px">' + pending.map(function (u) { return esc(u.name); }).join(", ") + '</p></div><a class="btn line" href="#/people/trainers">Review</a></div>' : "") +
-    '<h2 style="margin:22px 0 12px">Running batches</h2>' +
-    (running.length ? '<div class="cards">' + running.map(function (b) { return batchCard(b, cmap[b.courseId]); }).join("") + "</div>" : '<div class="empty">No running batch. <a href="#/batches">Create one</a>.</div>');
-  return render(html);
 }
 
 /* ---------- batch management ---------- */

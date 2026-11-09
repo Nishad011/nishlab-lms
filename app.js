@@ -326,6 +326,10 @@ function renderSideCard(D) {
   el.hidden = false;
   if (!nx) { el.innerHTML = "<p>No upcoming class yet.</p>" + (ME.role !== "student" && D.list[0] ? '<a class="btn sm block" href="#/b/' + esc(D.list[0].b.id) + '/classes">Add a class</a>' : '<p class="small" style="opacity:.85;margin-top:6px;font-weight:400">You will see a countdown here once it is scheduled.</p>'); return; }
   var meet = nx.s.meetLink || nx.b.meetLink;
+  if (!nx.known) {
+    el.innerHTML = "<p>Next class: " + esc(nx.c.code || "") + " Day " + esc(nx.s.day) + '</p><p class="small" style="font-weight:400;margin-top:6px;opacity:.9">' + (nx.s.date === today() ? "Today" : nx.start.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })) + (ME.role === "student" ? "" : " · add a timing like 8–10 PM in batch Settings to show a countdown") + "</p>" + (isUrl(meet) ? '<a class="btn sm block" href="' + esc(meet) + '" target="_blank" rel="noopener">Join class</a>' : "");
+    return;
+  }
   function draw() {
     var ms = nx.start - new Date();
     if (ms <= 0) { el.innerHTML = "<p>" + esc(nx.c.code || "") + " Day " + esc(nx.s.day) + " is live now</p>" + (isUrl(meet) ? '<a class="btn sm block" href="' + esc(meet) + '" target="_blank" rel="noopener">Join class</a>' : ""); return; }
@@ -478,7 +482,7 @@ async function adminHome() {
   var st = D.users.filter(function (u) { return u.role === "student"; }).length;
   var tr = D.users.filter(function (u) { return u.role === "trainer" && u.isApproved; }).length;
   var running = D.list.filter(function (x) { return x.b.status !== "completed"; });
-  var text = "<b>" + st + "</b> students · <b>" + running.length + "</b> running batch" + (running.length === 1 ? "" : "es") + " · <b>" + tr + "</b> trainer" + (tr === 1 ? "" : "s") + " · <b>" + D.certs.length + "</b> certificate" + (D.certs.length === 1 ? "" : "s");
+  var text = "<b>" + st + "</b> student" + (st === 1 ? "" : "s") + " · <b>" + running.length + "</b> running batch" + (running.length === 1 ? "" : "es") + " · <b>" + tr + "</b> trainer" + (tr === 1 ? "" : "s") + " · <b>" + D.certs.length + "</b> certificate" + (D.certs.length === 1 ? "" : "s");
   var btns = '<a class="btn coral" href="#/batches">New batch</a><a class="btn line" href="#/people" style="color:#fff">Copy sign-up link</a>';
   var html = helloHead("Here is how NISHLAB is doing today.") + hero("Run every batch from one place.", text, btns) +
     (!D.courses.length ? '<div class="card next" style="margin-top:20px"><div><h3>Start here: load the course syllabus</h3><p class="muted small" style="margin-top:4px">Creates AutoCAD, SolidWorks and ANSYS with every day from your website syllabus.</p></div><a class="btn" href="#/courses">Load syllabus</a></div>' : "") +

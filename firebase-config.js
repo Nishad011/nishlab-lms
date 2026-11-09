@@ -1,7 +1,6 @@
 // ============================================================
-// STEP 1: Go to https://console.firebase.google.com
-// Create a project -> Add a Web App -> copy the config below
-// Enable: Authentication (Email/Password) and Firestore Database
+// NISHLAB LMS v2 — Firebase connection (project: nishlab-lms)
+// Same project as v1, so existing logins keep working.
 // ============================================================
 const firebaseConfig = {
   apiKey: "AIzaSyANtAy5s9-IfcUzg1YnZZ4-xVtfpwpXCHw",
@@ -13,93 +12,65 @@ const firebaseConfig = {
   measurementId: "G-214K2GDS8T"
 };
 
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
+// Small data layer so the app never talks to Firebase directly.
+// (Makes the app easy to test and to move to another backend later.)
+(function () {
+  if (window.LMS_BACKEND) return; // a test backend was injected
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
+  const FV = firebase.firestore.FieldValue;
 
-// ------- Shared helper: require login + specific role -------
-function requireRole(allowedRoles, onReady) {
-  auth.onAuthStateChanged(async (user) => {
-    if (!user) { window.location.href = "login.html"; return; }
-    const doc = await db.collection("users").doc(user.uid).get();
-    if (!doc.exists) { window.location.href = "login.html"; return; }
-    const data = doc.data();
-    if (!allowedRoles.includes(data.role)) {
-      alert("Aapko is page ki permission nahi hai.");
-      redirectToDashboard(data.role);
-      return;
+  function ref(path) {
+    const parts = path.split("/");
+    return parts.length % 2 === 0 ? db.doc(path) : db.collection(path);
+  }
+  const snapDoc = (d) => (d.exists ? Object.assign({ id: d.id }, d.data()) : null);
+
+  window.LMS_BACKEND = {
+    auth: {
+      onChange: (cb) => auth.onAuthStateChanged((u) => cb(u ? { uid: u.uid, email: u.email } : null)),
+      signIn: (email, pw) => auth.signInWithEmailAndPassword(email, pw).then((c) => ({ uid: c.user.uid, email: c.user.email })),
+      signUp: (email, pw) => auth.createUserWithEmailAndPassword(email, pw).then((c) => ({ uid: c.user.uid, email: c.user.email })),
+      reset: (email) => auth.sendPasswordResetEmail(email),
+      signOut: () => auth.signOut()
+    },
+    db: {
+      get: async (path) => snapDoc(await db.doc(path).get()),
+      // filters: [[field, op, value], ...]
+      list: async (path, filters) => {
+        let q = db.collection(path);
+        (filters || []).forEach((f) => { q = q.where(f[0], f[1], f[2]); });
+        const s = await q.get();
+        return s.docs.map((d) => Object.assign({ id: d.id }, d.data()));
+      },
+      set: (path, data, merge) => db.doc(path).set(data, merge ? { merge: true } : {}),
+      update: (path, data) => db.doc(path).update(data),
+      add: async (path, data) => (await db.collection(path).add(data)).id,
+      del: (path) => db.doc(path).delete(),
+      now: () => FV.serverTimestamp(),
+      arrayUnion: (v) => FV.arrayUnion(v),
+      arrayRemove: (v) => FV.arrayRemove(v),
+      // write many docs at once: ops = [{type:'set'|'update'|'delete', path, data, merge}]
+      batchWrite: async (ops) => {
+        for (let i = 0; i < ops.length; i += 400) {
+          const b = db.batch();
+          ops.slice(i, i + 400).forEach((o) => {
+            if (o.type === "delete") b.delete(db.doc(o.path));
+            else if (o.type === "update") b.update(db.doc(o.path), o.data);
+            else b.set(db.doc(o.path), o.data, o.merge ? { merge: true } : {});
+          });
+          await b.commit();
+        }
+      },
+      // atomically take the next certificate number
+      nextCounter: (name, start) => db.runTransaction(async (t) => {
+        const r = db.doc("counters/" + name);
+        const s = await t.get(r);
+        const n = s.exists ? s.data().next : start;
+        t.set(r, { next: n + 1 });
+        return n;
+      })
     }
-    onReady(user, data);
-  });
-}
-
-function redirectToDashboard(role) {
-  if (role === "admin") window.location.href = "admin-dashboard.html";
-  else if (role === "trainer") window.location.href = "trainer-dashboard.html";
-  else window.location.href = "student-dashboard.html";
-}
-
-function logout() {
-  auth.signOut().then(() => window.location.href = "login.html");
-}
-
-// ------- Shared helper: get studentIds enrolled in a course -------
-async function getEnrolledStudentIds(courseId) {
-  const snap = await db.collection("enrollments").where("courseId", "==", courseId).get();
-  return snap.docs.map(d => d.data().studentId);
-}
-
-// ------- Shared helper: send an in-app notification to a list of students -------
-// notif = { courseId, type, title, message, link }
-async function notifyStudents(studentIds, notif) {
-  if (!studentIds || !studentIds.length) return;
-  const batch = db.batch();
-  studentIds.forEach(uid => {
-    const ref = db.collection("notifications").doc();
-    batch.set(ref, {
-      userId: uid,
-      courseId: notif.courseId || null,
-      type: notif.type || "info",
-      title: notif.title || "",
-      message: notif.message || "",
-      link: notif.link || null,
-      read: false,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-  });
-  await batch.commit();
-}
-
-// ------- Shared helper: notification bell (call after requireRole on student pages) -------
-function initNotificationBell(currentUser) {
-  const bell = document.getElementById("notifBell");
-  if (!bell) return;
-  bell.classList.remove("hidden");
-  db.collection("notifications").where("userId", "==", currentUser.uid)
-    .onSnapshot(snap => {
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      const unread = items.filter(n => !n.read).length;
-      const badge = document.getElementById("notifBadge");
-      if (badge) {
-        badge.textContent = unread;
-        badge.classList.toggle("hidden", unread === 0);
-      }
-      const list = document.getElementById("notifList");
-      if (list) {
-        list.innerHTML = items.length ? items.map(n => `
-          <div class="notif-item ${n.read ? '' : 'notif-unread'}" onclick="openNotif('${n.id}', ${n.link ? `'${n.link}'` : 'null'})">
-            <strong>${n.title}</strong>
-            <p class="muted" style="margin:4px 0 0;">${n.message}</p>
-          </div>
-        `).join("") : '<p class="muted" style="padding:14px;">No notifications yet.</p>';
-      }
-    });
-}
-function toggleNotifPanel() {
-  document.getElementById("notifPanel").classList.toggle("hidden");
-}
-async function openNotif(notifId, link) {
-  await db.collection("notifications").doc(notifId).update({ read: true });
-  if (link) window.location.href = link;
-}
+  };
+})();

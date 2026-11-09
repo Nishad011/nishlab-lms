@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify a NISHLAB Certificate</title>
+<meta name="description" content="Check that a NISHLAB CREATIONS certificate is genuine by its certificate ID.">
+<meta name="theme-color" content="#0e1114">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+.vwrap{max-width:640px;margin:0 auto;padding:40px 20px 60px}
+.vres{margin-top:22px}
+.seal{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;font-size:1.6rem;font-weight:800;flex:none}
+.seal.ok{background:rgba(62,207,142,.15);color:var(--ok);border:1px solid rgba(62,207,142,.5)}
+.seal.bad{background:rgba(255,107,107,.12);color:var(--bad);border:1px solid rgba(255,107,107,.45)}
+</style>
+</head>
+<body>
+<header class="topbar"><a class="brand" href="https://nishad011.github.io/nishlabcreations/"><img src="logo.png" alt="" width="20" height="30">NISHLAB CREATIONS</a></header>
+<main class="vwrap">
+  <p class="mono">Certificate verification</p>
+  <h1 style="margin-top:8px">Check a NISHLAB certificate</h1>
+  <p class="muted" style="margin-top:8px">Enter the ID printed under the QR code, for example NLC-2026-2052.</p>
+  <form id="vf" class="row" style="margin-top:18px"><input id="vid" style="flex:1;min-width:200px;font-family:var(--mono);text-transform:uppercase" placeholder="NLC-2026-XXXX" aria-label="Certificate ID" autocomplete="off"><button class="btn" type="submit">Verify</button></form>
+  <div id="res" class="vres" aria-live="polite"></div>
+</main>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+(function(){
+  var DB=window.LMS_BACKEND.db,$=function(i){return document.getElementById(i)};
+  function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+  function fd(s){if(!s)return"";if(s.toDate)s=s.toDate();var d=s instanceof Date?s:new Date(s+(String(s).length===10?"T00:00:00":""));return isNaN(d)?esc(s):d.toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"})}
+  async function check(id){
+    id=String(id||"").trim().toUpperCase();if(!id)return;
+    $("vid").value=id;$("res").innerHTML='<div class="spinner"></div>';
+    try{history.replaceState(null,"","?id="+encodeURIComponent(id))}catch(e){}
+    try{
+      var c=/^[A-Z0-9-]{4,40}$/.test(id)?await DB.get("certificates/"+id):null;
+      if(!c){$("res").innerHTML='<div class="card row" style="gap:16px;align-items:flex-start"><div class="seal bad">✕</div><div><h2>Not found</h2><p class="muted" style="margin-top:6px">No certificate with the ID <b>'+esc(id)+'</b> exists in our records. Check the ID, or WhatsApp +91 84240 99617 to confirm.</p></div></div>';return}
+      var ok=c.status!=="revoked";
+      $("res").innerHTML='<div class="card '+(ok?"cert":"")+'"><div class="row" style="gap:16px;align-items:flex-start"><div class="seal '+(ok?"ok":"bad")+'">'+(ok?"✓":"✕")+'</div><div><p class="mono">'+(ok?"Verified · genuine certificate":"This certificate was revoked")+'</p><h2 style="margin-top:6px">'+esc(c.studentName)+'</h2><p class="muted" style="margin-top:4px">'+esc(c.courseTitle)+'</p></div></div>'+
+        '<div style="margin-top:16px">'+
+        '<div class="kv"><span>Certificate ID</span><span style="font-family:var(--mono)">'+esc(c.certId||id)+'</span></div>'+
+        (c.trainingFrom?'<div class="kv"><span>Training period</span><span>'+fd(c.trainingFrom)+' – '+fd(c.trainingTo)+'</span></div>':'')+
+        '<div class="kv"><span>Issued on</span><span>'+fd(c.issuedOn||c.issuedAt)+'</span></div>'+
+        (c.score?'<div class="kv"><span>Final tool test</span><span>'+esc(c.score)+'%</span></div>':'')+
+        (c.attendancePct!=null&&c.attendancePct!==""?'<div class="kv"><span>Attendance</span><span>'+esc(c.attendancePct)+'%</span></div>':'')+
+        '<div class="kv"><span>Issued by</span><span>NISHLAB CREATIONS, Mumbai</span></div></div></div>';
+    }catch(e){$("res").innerHTML='<div class="err-box">Could not reach the records right now. Check your internet and try again.</div>'}
+  }
+  $("vf").onsubmit=function(e){e.preventDefault();check($("vid").value)};
+  var q=new URLSearchParams(location.search).get("id");if(q)check(q);
+})();
+</script>
+</body>
+</html>

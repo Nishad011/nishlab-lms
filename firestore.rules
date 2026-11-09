@@ -1,84 +1,117 @@
 rules_version = '2';
+// NISHLAB LMS v2 — Firestore security rules
+// Paste this whole file into Firebase Console > Firestore Database > Rules > Publish.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isSignedIn() { return request.auth != null; }
-    function getUserRole() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role; }
-    function isAdmin() { return isSignedIn() && getUserRole() == 'admin'; }
-    function isTrainer() { return isSignedIn() && getUserRole() == 'trainer'; }
+    function signedIn() { return request.auth != null; }
+    function me() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && me().role == 'admin'; }
+    function isTrainer() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && me().role == 'trainer' && me().isApproved == true; }
+    function batch(b) { return get(/databases/$(database)/documents/batches/$(b)).data; }
+    function isBatchTrainer(b) { return signedIn() && batch(b).trainerId == request.auth.uid; }
+    function inBatch(b) { return signedIn() && request.auth.uid in batch(b).studentIds; }
 
-    match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if isSignedIn() && request.auth.uid == userId
-                    && request.resource.data.role in ['student','trainer']
+    // ---------- People ----------
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      // self sign-up: students are active at once, trainers wait for admin approval
+      allow create: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.role in ['student', 'trainer']
                     && request.resource.data.isApproved == (request.resource.data.role == 'student');
-      allow update: if isAdmin() || (isSignedIn() && request.auth.uid == userId
+      // users may edit their own profile but never their role or approval
+      allow update: if isAdmin() || (signedIn() && request.auth.uid == uid
                     && request.resource.data.role == resource.data.role
                     && request.resource.data.isApproved == resource.data.isApproved);
       allow delete: if isAdmin();
     }
 
+    // ---------- Course content ----------
     match /courses/{courseId} {
-      allow read: if isSignedIn();
-      allow create: if isTrainer();
-      allow update, delete: if isAdmin() || (isSignedIn() && resource.data.trainerId == request.auth.uid);
-
+      allow read: if signedIn();
+      allow write: if isAdmin();
       match /lessons/{lessonId} {
-        allow read: if isSignedIn();
-        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
-      }
-      match /quiz/{quizId} {
-        allow read: if isSignedIn();
-        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
+        allow read: if signedIn();
+        allow write: if isAdmin() || isTrainer();
       }
       match /assignments/{assignmentId} {
-        allow read: if isSignedIn();
-        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
-
-        match /submissions/{subId} {
-          allow read: if isAdmin()
-                      || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid)
-                      || (isSignedIn() && resource.data.studentId == request.auth.uid);
-          allow create: if isSignedIn() && request.resource.data.studentId == request.auth.uid;
-          allow update: if isAdmin()
-                        || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid)
-                        || (isSignedIn() && resource.data.studentId == request.auth.uid);
-        }
-      }
-
-      match /projects/{projectId} {
-        allow read: if isSignedIn();
-        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
-
-        match /submissions/{subId} {
-          allow read: if isAdmin()
-                      || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid)
-                      || (isSignedIn() && resource.data.studentId == request.auth.uid);
-          allow create: if isSignedIn() && request.resource.data.studentId == request.auth.uid;
-          allow update: if isAdmin()
-                        || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid)
-                        || (isSignedIn() && resource.data.studentId == request.auth.uid);
-        }
-      }
-
-      match /liveClasses/{classId} {
-        allow read: if isSignedIn();
-        allow write: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/courses/$(courseId)).data.trainerId == request.auth.uid);
+        allow read: if signedIn();
+        allow write: if isAdmin() || isTrainer();
       }
     }
 
-    match /notifications/{notifId} {
-      allow read, update: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn(); // trainers/admins write notifications for students via batch
+    // ---------- Batches ----------
+    match /batches/{batchId} {
+      allow read: if isAdmin()
+                  || (signedIn() && resource.data.trainerId == request.auth.uid)
+                  || (signedIn() && request.auth.uid in resource.data.studentIds);
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+                    || (signedIn() && resource.data.trainerId == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['meetLink', 'timing', 'status']));
+
+      // classes held for the batch, with attendance
+      match /sessions/{sessionId} {
+        allow read: if isAdmin() || isBatchTrainer(batchId) || inBatch(batchId);
+        allow write: if isAdmin() || isBatchTrainer(batchId);
+      }
+    }
+
+    // ---------- Student work ----------
+    // id = <batchId>_<key>_<studentUid>; key = d1..dN or capstone
+    match /submissions/{subId} {
+      allow read: if isAdmin()
+                  || (signedIn() && resource.data.studentId == request.auth.uid)
+                  || (signedIn() && resource.data.trainerId == request.auth.uid);
+      allow create: if signedIn()
+                    && request.resource.data.studentId == request.auth.uid
+                    && inBatch(request.resource.data.batchId)
+                    && request.resource.data.trainerId == batch(request.resource.data.batchId).trainerId
+                    && request.resource.data.status == 'submitted'
+                    && !request.resource.data.keys().hasAny(['grade', 'feedback', 'reviewedBy']);
+      allow update: if isAdmin()
+                    // student re-submits a link; cannot touch the review
+                    || (signedIn() && resource.data.studentId == request.auth.uid
+                        && request.resource.data.studentId == request.auth.uid
+                        && request.resource.data.status == 'submitted'
+                        && request.resource.data.trainerId == batch(resource.data.batchId).trainerId
+                        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['grade', 'feedback', 'reviewedBy', 'batchId', 'key']))
+                    // trainer reviews
+                    || (signedIn() && resource.data.trainerId == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['grade', 'feedback', 'status', 'reviewedAt', 'reviewedBy']));
       allow delete: if isAdmin();
     }
 
-    match /enrollments/{enrollId} {
+    // id = <batchId>_<studentUid>; which days the student marked done
+    match /progress/{progId} {
+      // a student may look up their own record even before it exists
+      allow get: if signedIn() && progId.matches('.+_' + request.auth.uid);
       allow read: if isAdmin()
-                  || (isSignedIn() && resource.data.studentId == request.auth.uid)
-                  || (isSignedIn() && get(/databases/$(database)/documents/courses/$(resource.data.courseId)).data.trainerId == request.auth.uid);
-      allow create: if isSignedIn() && request.resource.data.studentId == request.auth.uid;
-      allow update: if isAdmin() || (isSignedIn() && resource.data.studentId == request.auth.uid);
+                  || (signedIn() && resource.data.studentId == request.auth.uid)
+                  || (signedIn() && resource.data.trainerId == request.auth.uid);
+      allow create, update: if signedIn()
+                    && request.resource.data.studentId == request.auth.uid
+                    && progId == request.resource.data.batchId + '_' + request.auth.uid
+                    && inBatch(request.resource.data.batchId)
+                    && request.resource.data.trainerId == batch(request.resource.data.batchId).trainerId;
+      allow delete: if isAdmin();
+    }
+
+    // ---------- Certificates ----------
+    // anyone can open one certificate by its ID (public verify page)
+    match /certificates/{certId} {
+      allow get: if true;
+      allow list: if isAdmin() || (signedIn() && resource.data.studentId == request.auth.uid);
+      allow write: if isAdmin();
+    }
+    match /counters/{name} {
+      allow read, write: if isAdmin();
+    }
+
+    // ---------- Notifications (kept from v1) ----------
+    match /notifications/{notifId} {
+      allow read, update: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isAdmin() || isTrainer();
       allow delete: if isAdmin();
     }
   }

@@ -1,19 +1,52 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NISHLAB LMS</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NISHLAB LMS | Sign in</title>
+<meta name="theme-color" content="#0e1114">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="auth-box center">
-  <h1>NISHLAB LMS</h1>
-  <p class="muted">Learning Management System</p>
-  <div id="loading"><div class="spinner"></div></div>
-  <div id="actions" class="hidden">
-    <a href="login.html" class="btn" style="width:100%;margin-bottom:10px;">Login</a>
-    <a href="signup.html" class="btn btn-outline" style="width:100%;">Sign Up</a>
+<div class="auth">
+  <div class="auth-art">
+    <a class="brand" href="https://nishad011.github.io/nishlabcreations/"><img src="logo.png" alt="" width="20" height="30">NISHLAB CREATIONS <small>LMS</small></a>
+    <div>
+      <p class="mono">Student portal · AutoCAD · SolidWorks · ANSYS</p>
+      <h1 style="margin-top:12px">Your classes, lessons and projects <em>in one place.</em></h1>
+      <ul>
+        <li>Join live classes with one tap</li>
+        <li>Watch each day's lesson and recording</li>
+        <li>Submit assignments and your capstone</li>
+        <li>Track attendance and earn your certificate</li>
+      </ul>
+    </div>
+    <p class="small muted">Need help? WhatsApp +91 84240 99617</p>
+  </div>
+  <div class="auth-form">
+    <div class="auth-card">
+      <h2>Welcome</h2>
+      <p class="muted" style="margin-top:6px">Sign in with the email you gave at enrolment.</p>
+      <div class="auth-tabs" role="tablist">
+        <button type="button" role="tab" id="tabIn" aria-selected="true">Sign in</button>
+        <button type="button" role="tab" id="tabUp" aria-selected="false">Create account</button>
+      </div>
+      <div id="msg" hidden></div>
+      <form id="form" novalidate>
+        <div class="field" id="nameF" hidden><label class="lbl" for="name">Full name (as on certificate)</label><input id="name" autocomplete="name"></div>
+        <div class="field" id="phoneF" hidden><label class="lbl" for="phone">WhatsApp number</label><input id="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="+91"></div>
+        <div class="field"><label class="lbl" for="email">Email</label><input id="email" type="email" autocomplete="email" inputmode="email"></div>
+        <div class="field"><label class="lbl" for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" minlength="6"></div>
+        <div class="field" id="roleF" hidden><label class="lbl" for="role">I am a</label>
+          <select id="role"><option value="student">Student</option><option value="trainer">Trainer (needs admin approval)</option></select></div>
+        <button class="btn block" id="go" type="submit">Sign in</button>
+        <p style="margin-top:14px;text-align:center"><button type="button" class="btn line sm" id="forgot">Forgot password?</button></p>
+      </form>
+    </div>
   </div>
 </div>
 
@@ -22,14 +55,44 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script>
-auth.onAuthStateChanged(async (user) => {
-  if (user) {
-    const doc = await db.collection("users").doc(user.uid).get();
-    if (doc.exists) { redirectToDashboard(doc.data().role); return; }
-  }
-  document.getElementById("loading").classList.add("hidden");
-  document.getElementById("actions").classList.remove("hidden");
-});
+(function(){
+  var B=window.LMS_BACKEND,mode="in",$=function(i){return document.getElementById(i)};
+  function msg(t,ok){var m=$("msg");m.hidden=!t;m.className=ok?"ok-box":"err-box";m.textContent=t||""}
+  function setMode(m){mode=m;$("tabIn").setAttribute("aria-selected",m==="in");$("tabUp").setAttribute("aria-selected",m==="up");
+    ["nameF","phoneF","roleF"].forEach(function(i){$(i).hidden=m!=="up"});$("forgot").hidden=m==="up";
+    $("go").textContent=m==="up"?"Create account":"Sign in";$("pw").autocomplete=m==="up"?"new-password":"current-password";msg("")}
+  $("tabIn").onclick=function(){setMode("in")};$("tabUp").onclick=function(){setMode("up")};
+  function nice(e){var c=(e&&e.code)||"";
+    if(/invalid-credential|wrong-password|user-not-found|invalid-login/.test(c))return "Email or password is wrong. Try again or reset your password.";
+    if(/email-already-in-use/.test(c))return "This email already has an account. Sign in instead.";
+    if(/weak-password/.test(c))return "Use at least 6 characters for the password.";
+    if(/invalid-email/.test(c))return "That email address doesn't look right.";
+    if(/too-many-requests/.test(c))return "Too many tries. Wait a minute and try again.";
+    if(/network/.test(c))return "No internet connection. Check your network and try again.";
+    return (e&&e.message)||"Something went wrong. Try again.";}
+  var busy=false;
+  $("form").addEventListener("submit",async function(ev){
+    ev.preventDefault();if(busy)return;
+    var email=$("email").value.trim(),pw=$("pw").value;
+    if(!email||!pw)return msg("Enter your email and password.");
+    busy=true;$("go").disabled=true;
+    try{
+      if(mode==="in"){await B.auth.signIn(email,pw);}
+      else{
+        var name=$("name").value.trim(),phone=$("phone").value.trim(),role=$("role").value;
+        if(!name){busy=false;$("go").disabled=false;return msg("Enter your full name.")}
+        if(pw.length<6){busy=false;$("go").disabled=false;return msg("Use at least 6 characters for the password.")}
+        var u=await B.auth.signUp(email,pw);
+        await B.db.set("users/"+u.uid,{name:name,email:email,phone:phone,role:role,isApproved:role==="student",createdAt:B.db.now()});
+      }
+      location.href="app.html";
+    }catch(e){msg(nice(e));busy=false;$("go").disabled=false;}
+  });
+  $("forgot").onclick=async function(){var email=$("email").value.trim();if(!email)return msg("Type your email above, then tap Forgot password.");
+    try{await B.auth.reset(email);msg("Password reset email sent to "+email+". Check your inbox and spam folder.",true)}catch(e){msg(nice(e))}};
+  var first=true;
+  B.auth.onChange(function(u){if(u&&first){location.href="app.html"}first=false});
+})();
 </script>
 </body>
 </html>

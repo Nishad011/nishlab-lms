@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Student Portfolio · NISHLAB CREATIONS</title>
+<meta name="theme-color" content="#1d1e42">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=22">
+<style>.pwrap{max-width:980px;margin:0 auto;padding:40px 20px 60px}</style>
+</head>
+<body>
+<header class="topbar"><a class="brand" href="https://nishad011.github.io/nishlabcreations/"><img src="logo.png" alt="" width="20" height="30">NISHLAB CREATIONS</a></header>
+<main class="pwrap">
+  <p class="mono">Student portfolio</p>
+  <h1 id="ttl" style="margin-top:8px">Portfolio</h1>
+  <p class="muted" style="margin-top:8px">3D models made by a NISHLAB student during training. Open a model to rotate it.</p>
+  <div id="res" style="margin-top:22px"><div class="spinner"></div></div>
+</main>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="files.js?v=1"></script>
+<script>
+(function () {
+  var DB = window.LMS_BACKEND.db, NLF = window.NLFILES, $ = function (i) { return document.getElementById(i); };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function fd(s) { if (!s) return ""; if (s.toDate) s = s.toDate(); var d = new Date(s); return isNaN(d) ? "" : d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); }
+  var uid = new URLSearchParams(location.search).get("u");
+  (async function () {
+    if (!uid) { $("res").innerHTML = '<div class="empty">This link is incomplete.</div>'; return; }
+    try {
+      var items = await DB.list("portfolio", [["studentId", "==", uid], ["public", "==", true]]);
+      if (!items.length) { $("res").innerHTML = '<div class="empty">No public models here yet.</div>'; return; }
+      items.sort(function (a, b) { return ((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0); });
+      $("ttl").textContent = items[0].studentName + "'s portfolio";
+      document.title = items[0].studentName + " · Portfolio · NISHLAB CREATIONS";
+      $("res").innerHTML = '<div class="cards">' + items.map(function (p) {
+        var step = /\.(stp|step|igs|iges)$/i.test(p.fileName || "");
+        return '<div class="card"><p class="mono">' + esc(fd(p.createdAt)) + '</p><h3 style="margin-top:4px">' + esc(p.title) + "</h3>" + (p.desc ? '<p class="small muted" style="margin-top:8px">' + esc(p.desc) + "</p>" : "") +
+          '<div class="row" style="margin-top:12px">' + (step ? '<button class="btn sm" data-v="' + esc(p.id) + '">View 3D</button>' : "") + '<button class="btn line sm" data-d="' + esc(p.id) + '">Download</button></div></div>';
+      }).join("") + "</div>";
+      var by = {}; items.forEach(function (p) { by[p.id] = p; });
+      function get(p) { return NLF.download(p.fileId, "portfolio/" + p.id, null); }
+      Array.prototype.forEach.call(document.querySelectorAll("[data-v]"), function (b) { b.onclick = function () { var p = by[b.getAttribute("data-v")]; NLF.view3d(p.title, async function () { var r = await get(p); return { buf: await r.blob.arrayBuffer(), name: p.fileName }; }); }; });
+      Array.prototype.forEach.call(document.querySelectorAll("[data-d]"), function (b) { b.onclick = async function () { var p = by[b.getAttribute("data-d")], t = b.textContent; b.disabled = true; b.textContent = "Downloading…"; try { var r = await get(p); NLF.saveBlob(r.blob, p.fileName || r.name); } catch (e) { alert(e.message); } b.disabled = false; b.textContent = t; }; });
+    } catch (e) { $("res").innerHTML = '<div class="err-box">Could not load this portfolio right now.</div>'; }
+  })();
+})();
+</script>
+</body>
+</html>

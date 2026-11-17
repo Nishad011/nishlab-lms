@@ -39,6 +39,34 @@ function driveEmbed(u) {
   return null;
 }
 function link(u, label, cls) { return isUrl(u) ? '<a class="' + (cls || "btn line sm") + '" href="' + esc(u) + '" target="_blank" rel="noopener">' + esc(label) + "</a>" : ""; }
+var NLF = window.NLFILES;
+var SECTIONS = [["software", "Software and installation"], ["notes", "Notes"], ["exam", "Exams"], ["quiz", "Quizzes"], ["project", "Final project"], ["apdl", "ANSYS APDL assignments"], ["workbench", "ANSYS Workbench"], ["lecture", "Workbench lectures"], ["cfd", "ANSYS CFD"]];
+function isDayKey(k) { return /^d\d+$/.test(k || ""); }
+function keyLabel(k, lmap, rmap) {
+  if (k === "capstone") return "Industry capstone";
+  if (isDayKey(k)) return "Day " + k.slice(1) + (lmap && lmap[k] ? " · " + lmap[k] : "");
+  var id = String(k || "").replace(/^r_/, "");
+  return (rmap && rmap[id]) || "Assignment";
+}
+function isStepName(n) { return /\.(stp|step|igs|iges)$/i.test(n || ""); }
+function fileBtns(fileId, docPath, name, size) {
+  if (!fileId) return "";
+  var a = ' data-dl="' + esc(fileId) + '" data-doc="' + esc(docPath) + '" data-name="' + esc(name || "file") + '"';
+  return '<span class="filebar"><span class="chip">' + esc(name || "file") + (size ? " · " + NLF.human(size) : "") + "</span>" +
+    (isStepName(name) ? '<button type="button" class="btn line sm"' + a + ' data-mode="3d">View 3D</button>' : "") +
+    '<button type="button" class="btn sm"' + a + ">Download</button></span>";
+}
+async function onFileClick(e) {
+  var b = e.target.closest("[data-dl]"); if (!b) return;
+  var id = b.getAttribute("data-dl"), doc = b.getAttribute("data-doc"), name = b.getAttribute("data-name");
+  if (b.getAttribute("data-mode") === "3d") {
+    NLF.view3d(name, async function () { var r = await NLF.download(id, doc, B.auth.getToken); return { buf: await r.blob.arrayBuffer(), name: name }; });
+    return;
+  }
+  var old = b.textContent; b.disabled = true; b.textContent = "Downloading…";
+  try { var r = await NLF.download(id, doc, B.auth.getToken); NLF.saveBlob(r.blob, name || r.name); } catch (er) { fail(er); }
+  b.disabled = false; b.textContent = old;
+}
 function pct(a, b) { return b ? Math.round((a / b) * 100) : 0; }
 function byDay(a, b) { return (a.day || 0) - (b.day || 0); }
 function byDate(a, b) { return String(a.date || "").localeCompare(String(b.date || "")) || (a.day || 0) - (b.day || 0); }
@@ -55,6 +83,7 @@ function verifyUrl(id) { return location.href.replace(/app\.html.*$/, "verify.ht
 /* ---------------- state ---------------- */
 var ME = null; // {uid, email, name, role, isApproved, phone}
 var view = $("#view");
+view.addEventListener("click", onFileClick);
 
 /* ---------------- data ---------------- */
 var data = {
@@ -162,9 +191,10 @@ async function route() {
   try {
     if (!parts.length) fn = r === "admin" ? adminHome : r === "trainer" ? trainerHome : studentHome;
     else if (parts[0] === "b" && parts[1]) {
-      if (r === "student") fn = parts[2] === "d" ? function () { return studentDay(parts[1], +parts[3]); } : function () { return studentBatch(parts[1]); };
+      if (r === "student") fn = parts[2] === "d" ? function () { return studentDay(parts[1], +parts[3]); } : parts[2] === "res" ? function () { return studentResources(parts[1]); } : parts[2] === "rec" ? function () { return studentRecordings(parts[1]); } : function () { return studentBatch(parts[1]); };
       else fn = function () { return manageBatch(parts[1], parts[2] || "classes"); };
     }
+    else if (parts[0] === "portfolio" && parts[1] && r !== "student") fn = function () { return portfolioOf(parts[1]); };
     else if (parts[0] === "certs") fn = r === "admin" ? adminCerts : studentCerts;
     else if (parts[0] === "profile") fn = profileView;
     else if (parts[0] === "courses" && r !== "student") fn = coursesView;
@@ -244,7 +274,7 @@ function buildTasks(D) {
     D.list.forEach(function (x) {
       var subs = {}; x.subs.forEach(function (s) { subs[s.key] = s; });
       x.subs.filter(function (s) { return s.status === "redo"; }).forEach(function (s) {
-        T.push({ title: "Redo " + (s.key === "capstone" ? "capstone" : "Day " + s.key.slice(1)), tag: "#" + (x.c.code || "course").toLowerCase(), note: "Trainer asked", href: "#/b/" + x.b.id + (s.key === "capstone" ? "" : "/d/" + s.key.slice(1)) });
+        T.push({ title: "Redo " + (s.key === "capstone" ? "capstone" : isDayKey(s.key) ? "Day " + s.key.slice(1) : "assignment"), tag: "#" + (x.c.code || "course").toLowerCase(), note: "Trainer asked", href: "#/b/" + x.b.id + (s.key === "capstone" ? "" : isDayKey(s.key) ? "/d/" + s.key.slice(1) : "/res") });
       });
       var held = x.ses.filter(function (s) { return (s.date || "") <= t; }).slice().reverse();
       var seen = {};
@@ -505,13 +535,22 @@ async function loadStudentBatch(bid) {
 async function saveProgress(b, days) {
   await DB.set("progress/" + b.id + "_" + ME.uid, { batchId: b.id, studentId: ME.uid, trainerId: b.trainerId || "", completedDays: days, updatedAt: DB.now() }, true);
 }
-async function submitWork(b, key, linkV, note) {
-  linkV = cleanUrl(linkV);
-  if (!isUrl(linkV)) { toast("Paste a full link, for example a Google Drive share link.", true); return false; }
+async function submitWork(b, key, linkV, note, file) {
+  linkV = String(linkV || "").trim(); if (linkV) linkV = cleanUrl(linkV);
+  if (!file && !isUrl(linkV)) { toast("Attach a file or paste a Google Drive link.", true); return false; }
+  if (linkV && !isUrl(linkV)) { toast("That link doesn't look right.", true); return false; }
+  var f = {};
+  if (file) {
+    if (!NLF.enabled()) { toast("File upload is not switched on yet. Paste a Drive link for now.", true); return false; }
+    var bad = NLF.check(file); if (bad) { toast(bad, true); return false; }
+    toast("Uploading " + file.name + "…");
+    f = await NLF.upload(file, B.auth.getToken, ME.uid);
+  }
   var id = b.id + "_" + key + "_" + ME.uid;
   await DB.set("submissions/" + id, {
     batchId: b.id, courseId: b.courseId, key: key, studentId: ME.uid, studentName: ME.name || ME.email,
-    trainerId: b.trainerId || "", link: linkV, note: note || "", status: "submitted", submittedAt: DB.now()
+    trainerId: b.trainerId || "", link: linkV, fileId: f.fileId || "", fileName: f.fileName || "", fileSize: f.fileSize || 0,
+    note: note || "", status: "submitted", submittedAt: DB.now()
   }, true);
   toast("Submitted. Your trainer will review it.");
   return true;
@@ -526,6 +565,7 @@ async function studentBatch(bid) {
   var html = '<p><a class="btn line sm" href="#/">← My courses</a></p>' +
     '<div class="page-head" style="margin-top:14px"><div><p class="mono">' + esc(c.code || "") + " · " + esc(b.name) + "</p><h1>" + esc(c.title) + '</h1><p>Trainer: ' + esc(b.trainerName || "NISHLAB mentor") + (b.timing ? " · " + esc(b.timing) : "") + "</p></div>" +
     (isUrl(meet) ? '<a class="btn" href="' + esc(meet) + '" target="_blank" rel="noopener">Join live class</a>' : "") + "</div>" +
+    '<div class="row" style="margin:14px 0 4px"><a class="btn line sm" href="#/b/' + esc(bid) + '/res">Course resources</a><a class="btn line sm" href="#/b/' + esc(bid) + '/rec">Class recordings</a><a class="btn line sm" href="#/profile">My portfolio</a></div>' +
     (nx ? '<div class="card next"><div><p class="mono">Next class</p><h3 style="margin-top:4px">' + fmtDate(nx.date) + " · Day " + esc(nx.day) + ": " + esc(nx.topic || "") + "</h3></div>" + link(nx.meetLink || b.meetLink, "Join on Google Meet", "btn") + "</div>" : "") +
     '<div class="stats" style="margin-top:14px">' +
     '<div class="stat"><b>' + pct(done.length, lessons.length) + '%</b><span>lessons done (' + done.length + "/" + lessons.length + ")</span></div>" +
@@ -543,20 +583,24 @@ async function studentBatch(bid) {
     workBox(cap, "capstone") + "</div>";
   render(html, function () { bindWork(b, "capstone"); });
 }
-function workBox(sub, key) {
+function workBox(sub, key, closed) {
+  var up = NLF.enabled();
   return '<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line)">' +
-    (sub ? '<div class="row" style="margin-bottom:12px">' + statusChip(sub) + link(sub.link, "Open my submission") + "</div>" +
+    (sub ? '<div class="row" style="margin-bottom:12px">' + statusChip(sub) + link(sub.link, "Open my link") + fileBtns(sub.fileId, "submissions/" + sub.id, sub.fileName, sub.fileSize) + "</div>" +
       (sub.feedback ? '<div class="ok-box" style="color:var(--text)"><b>Trainer feedback:</b> ' + esc(sub.feedback) + "</div>" : "") : "") +
-    (sub && sub.status === "reviewed" ? "" :
-      '<form data-work="' + key + '"><div class="field"><label class="lbl" for="w-' + key + '">' + (sub ? "Send a new link" : "Your Google Drive link") + '</label><input id="w-' + key + '" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://drive.google.com/..." value="' + esc(sub && sub.status === "redo" ? "" : (sub && sub.link) || "") + '"></div>' +
+    (closed ? '<p class="small muted">Submissions are closed for this assignment.</p>' : sub && sub.status === "reviewed" ? "" :
+      '<form data-work="' + key + '">' +
+      (up ? '<div class="field"><label class="lbl" for="x-' + key + '">' + (sub ? "Upload a new file" : "Upload your file") + ' (STEP, PDF, image, ZIP · max 20 MB)</label><input id="x-' + key + '" type="file" accept=".stp,.step,.igs,.iges,.pdf,.png,.jpg,.jpeg,.zip,.7z,.rar,.wbpz,.dwg,.dxf,.sldprt,.sldasm,.slddrw,.txt"></div>' : "") +
+      '<div class="field"><label class="lbl" for="w-' + key + '">' + (up ? "Or paste a Google Drive link" : sub ? "Send a new link" : "Your Google Drive link") + '</label><input id="w-' + key + '" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://drive.google.com/..." value="' + esc(sub && sub.status === "redo" ? "" : (sub && sub.link) || "") + '"></div>' +
       '<div class="field"><label class="lbl" for="n-' + key + '">Note for your trainer (optional)</label><input id="n-' + key + '" maxlength="300"></div>' +
-      '<button class="btn sm" type="submit">' + (sub ? "Update submission" : "Submit") + '</button><p class="small muted" style="margin-top:8px">Set the Drive file or folder to "Anyone with the link can view".</p></form>') + "</div>";
+      '<button class="btn sm" type="submit">' + (sub ? "Update submission" : "Submit") + '</button><p class="small muted" style="margin-top:8px">' + (up ? "Upload a file, or share a Drive link set to \"Anyone with the link can view\"." : 'Set the Drive file or folder to "Anyone with the link can view".') + "</p></form>") + "</div>";
 }
 function bindWork(b, key, after) {
   var f = $('form[data-work="' + key + '"]'); if (!f) return;
   f.addEventListener("submit", async function (e) {
     e.preventDefault(); var btn = f.querySelector("button"); btn.disabled = true;
-    try { if (await submitWork(b, key, $("#w-" + key).value, $("#n-" + key).value)) (after || route)(); else btn.disabled = false; }
+    var fi = $("#x-" + key), file = fi && fi.files && fi.files[0];
+    try { if (await submitWork(b, key, $("#w-" + key).value, $("#n-" + key).value, file)) (after || route)(); else btn.disabled = false; }
     catch (er) { fail(er); btn.disabled = false; }
   });
 }
@@ -592,6 +636,79 @@ async function studentDay(bid, n) {
   });
 }
 
+function byOrder(a, b) { return (a.order || 999) - (b.order || 999); }
+function resLinks(x) {
+  var out = "";
+  if (isUrl(x.url)) out += link(x.url, x.section === "quiz" ? "Take quiz" : /youtube|youtu\.be/.test(x.url) ? "Watch video" : /drive\.google\.com\/drive\/folders/.test(x.url) ? "Open folder" : "Open", "btn sm");
+  if (isUrl(x.refUrl)) out += link(x.refUrl, "Reference", "btn line sm");
+  return out;
+}
+async function studentResources(bid) {
+  var b = await DB.get("batches/" + bid); if (!b) throw new Error("This batch was not found or you are not in it.");
+  var r = await Promise.all([DB.get("courses/" + b.courseId), DB.list("courses/" + b.courseId + "/resources"), data.submissions(bid)]);
+  var c = r[0] || { title: b.courseTitle }, res = r[1].sort(byOrder), subs = {}; r[2].forEach(function (x) { subs[x.key] = x; });
+  var asg = [];
+  var body = SECTIONS.map(function (sec) {
+    var items = res.filter(function (x) { return x.section === sec[0]; }); if (!items.length) return "";
+    return '<h2 style="margin:26px 0 12px">' + esc(sec[1]) + '</h2><div class="stack">' + items.map(function (x) {
+      var key = "r_" + x.id, sub = subs[key], closed = x.status === "closed";
+      if (x.kind === "assignment") asg.push(key);
+      return '<div class="card"><div class="row" style="justify-content:space-between;align-items:flex-start"><div style="flex:1;min-width:200px"><h3>' + esc(x.title) + "</h3>" + (x.desc ? '<p class="small muted" style="margin-top:4px;white-space:pre-line">' + esc(x.desc) + "</p>" : "") + '</div><div class="row">' +
+        resLinks(x) + (!isUrl(x.url) && x.kind !== "assignment" ? chip("Link coming soon", "warn") : "") + (x.kind === "assignment" ? (closed ? chip("Closed", "bad") : sub ? statusChip(sub) : chip("Open", "hot")) : "") + "</div></div>" +
+        (x.kind === "assignment" ? workBox(sub, key, closed && !sub) : "") + "</div>";
+    }).join("") + "</div>" + (sec[0] === "apdl" && b.courseId === "ansys" ? dofCard() : "");
+  }).join("");
+  render('<p><a class="btn line sm" href="#/b/' + esc(bid) + '">← ' + esc(c.title) + '</a></p><div class="page-head" style="margin-top:14px"><div><p class="mono">' + esc(c.code || "") + "</p><h1>Course resources</h1><p>Software, notes, quizzes, exams and assignments in one place. Upload your assignment right here.</p></div></div>" +
+    (body || '<div class="empty">Your trainer has not added resources for this course yet.</div>'), function () { asg.forEach(function (k) { bindWork(b, k); }); });
+}
+function dofCard() {
+  var H = ["Support", "UX", "UY", "UZ", "ROTX", "ROTY", "ROTZ"];
+  return '<div class="card" style="margin-top:14px"><h3>APDL supports: DOF constraints</h3><p class="small muted" style="margin:4px 0 12px">0 means the degree of freedom is constrained. Free means it can move.</p><div class="table-wrap"><table><thead><tr>' + H.map(function (h) { return "<th>" + h + "</th>"; }).join("") + "</tr></thead><tbody>" +
+    (window.NL_DOF || []).map(function (r) { return "<tr>" + r.map(function (v, i) { return i ? "<td>" + esc(v) + "</td>" : "<td><b>" + esc(v) + "</b></td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table></div></div>";
+}
+
+/* ---------- portfolio ---------- */
+function portCard(p, own) {
+  var pub = p.public === true;
+  return '<div class="card pcard"><div class="row" style="justify-content:space-between"><div><p class="mono">' + fmtDate(p.createdAt) + '</p><h3 style="margin-top:4px">' + esc(p.title) + "</h3></div>" + (pub ? chip("Public", "ok") : chip("Private", "")) + "</div>" +
+    (p.desc ? '<p class="small muted" style="margin-top:8px;white-space:pre-line">' + esc(p.desc) + "</p>" : "") +
+    '<div class="row" style="margin-top:12px">' + fileBtns(p.fileId, "portfolio/" + p.id, p.fileName, p.fileSize) + "</div>" +
+    (own ? '<div class="row" style="margin-top:12px"><label class="row small"><input type="checkbox" data-pub="' + esc(p.id) + '"' + (pub ? " checked" : "") + "> Show on my public portfolio link</label><button class=\"btn danger sm\" type=\"button\" data-pdel=\"" + esc(p.id) + '">Delete</button></div>' : "") + "</div>";
+}
+function publicUrl(uid) { return location.href.replace(/app\.html.*$/, "portfolio.html?u=" + encodeURIComponent(uid)); }
+function portfolioSection(items) {
+  var anyPub = items.some(function (p) { return p.public === true; });
+  return '<h2 style="margin:30px 0 8px">My portfolio</h2><p class="muted small" style="max-width:640px">Upload your best 3D models (STEP). They stay private: only you, your trainer and the admin can open them. Tick "Show on my public portfolio link" to share one with employers.</p>' +
+    (NLF.enabled() ? '<form class="card" id="pform" style="margin-top:14px;max-width:720px"><div class="grid2"><div class="field"><label class="lbl" for="pt">Title</label><input id="pt" required maxlength="80" placeholder="Rear shock absorber assembly"></div>' +
+      '<div class="field"><label class="lbl" for="pf">3D file (STEP, IGES, or an image/PDF · max 20 MB)</label><input id="pf" type="file" required accept=".stp,.step,.igs,.iges,.pdf,.png,.jpg,.jpeg,.zip,.wbpz,.sldprt,.sldasm"></div></div>' +
+      '<div class="field"><label class="lbl" for="pd">What is it? (optional)</label><input id="pd" maxlength="300" placeholder="Software used, what you learned"></div><button class="btn" type="submit">Add to portfolio</button></form>' :
+      '<div class="empty" style="margin-top:14px">File upload is not switched on yet.</div>') +
+    (anyPub ? '<div class="card row" style="margin-top:14px;justify-content:space-between"><div><p class="mono">Your public link</p><p class="small hot" style="word-break:break-all">' + esc(publicUrl(ME.uid)) + '</p></div><button class="btn line sm" type="button" id="copyPub">Copy link</button></div>' : "") +
+    (items.length ? '<div class="cards" style="margin-top:14px">' + items.map(function (p) { return portCard(p, true); }).join("") + "</div>" : '<div class="empty" style="margin-top:14px">Nothing here yet. Add your first model above.</div>');
+}
+function bindPortfolio() {
+  var f = $("#pform"); if (f) f.onsubmit = async function (e) {
+    e.preventDefault(); var btn = f.querySelector("button"), file = $("#pf").files[0]; btn.disabled = true; btn.textContent = "Uploading…";
+    try {
+      var up = await NLF.upload(file, B.auth.getToken, ME.uid);
+      await DB.add("portfolio", { studentId: ME.uid, studentName: ME.name || ME.email, title: $("#pt").value.trim(), desc: $("#pd").value.trim(), fileId: up.fileId, fileName: up.fileName, fileSize: up.fileSize, public: false, createdAt: DB.now() });
+      toast("Added to your portfolio."); route();
+    } catch (er) { fail(er); btn.disabled = false; btn.textContent = "Add to portfolio"; }
+  };
+  $$("[data-pub]").forEach(function (c) { c.onchange = async function () { try { await DB.update("portfolio/" + this.getAttribute("data-pub"), { public: this.checked }); toast(this.checked ? "Now public." : "Now private."); route(); } catch (er) { fail(er); } }; });
+  $$("[data-pdel]").forEach(function (x) { x.onclick = async function () {
+    if (this.dataset.confirm !== "1") { this.dataset.confirm = "1"; this.textContent = "Tap to confirm"; return; }
+    try { await DB.del("portfolio/" + this.getAttribute("data-pdel")); toast("Removed."); route(); } catch (er) { fail(er); }
+  }; });
+  var cp = $("#copyPub"); if (cp) cp.onclick = function () { var u = publicUrl(ME.uid); navigator.clipboard.writeText(u).then(function () { toast("Link copied."); }, function () { toast(u); }); };
+}
+async function portfolioOf(uid) {
+  var items = (await DB.list("portfolio", [["studentId", "==", uid]])).sort(function (a, b) { return String((b.createdAt && b.createdAt.seconds) || 0).localeCompare(String((a.createdAt && a.createdAt.seconds) || 0)); });
+  var name = (items[0] && items[0].studentName) || "Student";
+  return render('<p><a class="btn line sm" href="javascript:history.back()">← Back</a></p><div class="page-head" style="margin-top:14px"><div><p class="mono">Student portfolio</p><h1>' + esc(name) + "</h1></div></div>" +
+    (items.length ? '<div class="cards">' + items.map(function (p) { return portCard(p, false); }).join("") + "</div>" : '<div class="empty">This student has not added anything to their portfolio yet.</div>'));
+}
+
 async function studentCerts() {
   var certs = await data.myCerts();
   return render('<div class="page-head"><div><h1>My certificates</h1><p>Each certificate has an ID and a public page employers can open to check it.</p></div></div>' +
@@ -607,14 +724,18 @@ function certCard(x) {
 }
 
 async function profileView() {
+  var items = [];
+  if (ME.role === "student") items = (await DB.list("portfolio", [["studentId", "==", ME.uid]]).catch(function () { return []; })).sort(function (a, b) { return ((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0); });
   return render('<div class="page-head"><div><h1>Profile</h1><p>This name is printed on your certificate.</p></div></div>' +
-    '<form class="card" id="pf" style="max-width:520px"><div class="field"><label class="lbl" for="pn">Full name</label><input id="pn" value="' + esc(ME.name) + '" required></div>' +
+    '<form class="card" id="pf0" style="max-width:520px"><div class="field"><label class="lbl" for="pn">Full name</label><input id="pn" value="' + esc(ME.name) + '" required></div>' +
     '<div class="field"><label class="lbl" for="pp">WhatsApp number</label><input id="pp" type="tel" value="' + esc(ME.phone || "") + '"></div>' +
-    '<div class="field"><label class="lbl">Email</label><input value="' + esc(ME.email) + '" disabled></div><button class="btn" type="submit">Save</button></form>', function () {
-    $("#pf").onsubmit = async function (e) {
+    '<div class="field"><label class="lbl">Email</label><input value="' + esc(ME.email) + '" disabled></div><button class="btn" type="submit">Save</button></form>' +
+    (ME.role === "student" ? portfolioSection(items) : ""), function () {
+    $("#pf0").onsubmit = async function (e) {
       e.preventDefault(); var name = $("#pn").value.trim(); if (!name) return toast("Enter your name.", true);
       try { await DB.update("users/" + ME.uid, { name: name, phone: $("#pp").value.trim() }); ME.name = name; ME.phone = $("#pp").value.trim(); showWho(ME); toast("Profile saved."); } catch (er) { fail(er); }
     };
+    if (ME.role === "student") bindPortfolio();
   });
 }
 
@@ -634,15 +755,15 @@ function batchCard(b, c) {
 async function manageBatch(bid, tab) {
   var b = await DB.get("batches/" + bid);
   if (!b) throw new Error("Batch not found.");
-  var r = await Promise.all([DB.get("courses/" + b.courseId), data.lessons(b.courseId), data.sessions(bid), data.submissions(bid), data.progress(bid), data.certsForBatch(bid), data.assignments(b.courseId)]);
-  var M = { b: b, c: r[0] || { title: b.courseTitle, days: 0 }, lessons: r[1], ses: r[2], subs: r[3], prog: r[4], certs: r[5], asg: r[6] };
+  var r = await Promise.all([DB.get("courses/" + b.courseId), data.lessons(b.courseId), data.sessions(bid), data.submissions(bid), data.progress(bid), data.certsForBatch(bid), data.assignments(b.courseId), DB.list("courses/" + b.courseId + "/resources").catch(function () { return []; }), DB.list("batches/" + bid + "/recordings").catch(function () { return []; })]);
+  var M = { b: b, c: r[0] || { title: b.courseTitle, days: 0 }, lessons: r[1], ses: r[2], subs: r[3], prog: r[4], certs: r[5], asg: r[6], res: r[7], recs: r[8] };
   var pendingWork = M.subs.filter(function (s) { return s.status === "submitted"; }).length;
-  var tabs = [["classes", "Classes & attendance"], ["students", "Students"], ["work", "Submissions" + (pendingWork ? " (" + pendingWork + ")" : "")], ["settings", "Settings"]];
+  var tabs = [["classes", "Classes"], ["attendance", "Attendance"], ["recordings", "Recordings"], ["students", "Students"], ["work", "Submissions" + (pendingWork ? " (" + pendingWork + ")" : "")], ["settings", "Settings"]];
   var head = '<p><a class="btn line sm" href="' + (ME.role === "admin" ? "#/batches" : "#/") + '">← Batches</a></p>' +
     '<div class="page-head" style="margin-top:14px"><div><p class="mono">' + esc(M.c.code || "") + " · " + esc(M.c.title) + "</p><h1>" + esc(b.name) + "</h1><p>" + esc(b.trainerName || "No trainer") + (b.timing ? " · " + esc(b.timing) : "") + " · " + (b.studentIds || []).length + ((b.studentIds || []).length === 1 ? " student" : " students") + "</p></div>" +
-    link(b.meetLink, "Open Meet link", "btn line") + "</div>" +
+    link(b.meetLink, "Open meeting link", "btn line") + '<a class="btn line" href="#/c/' + esc(b.courseId) + '">Course content</a>' + "</div>" +
     '<nav class="tabs" aria-label="Batch sections">' + tabs.map(function (t) { return '<a href="#/b/' + esc(bid) + "/" + t[0] + '" class="' + (t[0] === tab ? "on" : "") + '">' + esc(t[1]) + "</a>"; }).join("") + "</nav>";
-  var body = tab === "students" ? tabStudents(M) : tab === "work" ? tabWork(M) : tab === "settings" ? await tabSettings(M) : tabClasses(M);
+  var body = tab === "students" ? tabStudents(M) : tab === "work" ? tabWork(M) : tab === "settings" ? await tabSettings(M) : tab === "attendance" ? tabAttendance(M) : tab === "recordings" ? tabRecordings(M) : tabClasses(M);
   render(head + body.html, body.bind);
 }
 
@@ -653,7 +774,7 @@ function tabClasses(M) {
   var html = '<form class="card" id="addClass"><h3>Add a class</h3><div class="grid3" style="margin-top:14px">' +
     '<div class="field"><label class="lbl" for="sd">Date</label><input id="sd" type="date" value="' + today() + '" required></div>' +
     '<div class="field"><label class="lbl" for="sday">Syllabus day</label><select id="sday">' + lessonOpts.map(function (l) { return '<option value="' + l.day + '"' + (l.day === nextDay ? " selected" : "") + ">Day " + l.day + " · " + esc(l.title) + "</option>"; }).join("") + "</select></div>" +
-    '<div class="field"><label class="lbl" for="smeet">Meet link</label><input id="smeet" type="text" inputmode="url" autocapitalize="off" spellcheck="false" value="' + esc(b.meetLink || "") + '" placeholder="https://meet.google.com/..."></div></div>' +
+    '<div class="field"><label class="lbl">Meeting link</label><p class="small" style="padding:10px 0">' + (isUrl(b.meetLink) ? "Same link for the whole course. Change it in Settings." : '<span class="hot">Not set yet.</span> Add the one course meeting link in Settings.') + "</p></div></div>" +
     '<button class="btn" type="submit">Add class</button></form>' +
     '<h2 style="margin:24px 0 12px">Classes (' + M.ses.length + ")</h2>" +
     (M.ses.length ? M.ses.slice().reverse().map(function (s) {
@@ -663,21 +784,18 @@ function tabClasses(M) {
         '<div class="body"><form data-ses="' + esc(s.id) + '"><p class="mono">Attendance</p>' +
         (students.length ? '<div class="att">' + students.map(function (st) {
           return '<label><input type="checkbox" value="' + esc(st.uid) + '"' + (pres.indexOf(st.uid) >= 0 ? " checked" : "") + "> <span>" + esc(st.name) + "</span></label>";
-        }).join("") + '</div><p class="row" style="margin-bottom:14px"><button type="button" class="btn line sm" data-all>Mark all present</button></p>' : '<p class="muted small" style="margin:8px 0 14px">No students in this batch yet.</p>') +
-        '<div class="grid2"><div class="field"><label class="lbl" for="rec-' + esc(s.id) + '">Recording link (Google Drive)</label><input id="rec-' + esc(s.id) + '" type="text" inputmode="url" autocapitalize="off" spellcheck="false" value="' + esc(s.recordingUrl || "") + '" placeholder="https://drive.google.com/file/d/..."></div>' +
-        '<div class="field"><label class="lbl" for="ml-' + esc(s.id) + '">Meet link</label><input id="ml-' + esc(s.id) + '" type="text" inputmode="url" autocapitalize="off" spellcheck="false" value="' + esc(s.meetLink || "") + '"></div></div>' +
+        }).join("") + '</div><p class="row" style="margin-bottom:14px"><button type="button" class="btn line sm" data-all>Mark all present</button><button type="button" class="btn line sm" data-none>Clear all</button></p>' : '<p class="muted small" style="margin:8px 0 14px">No students in this batch yet.</p>') +
         '<div class="row"><button class="btn sm" type="submit">Save class</button><button class="btn danger sm" type="button" data-del>Delete class</button></div></form></div></details>';
     }).join("") : '<div class="empty">No classes yet. Add the first one above; students see it as their next class.</div>');
   return { html: html, bind: function () {
     $("#addClass").onsubmit = async function (e) {
       e.preventDefault(); var day = +$("#sday").value, l = lessonOpts.filter(function (x) { return x.day === day; })[0];
-      var meet = cleanUrl($("#smeet").value);
-      if (meet && !isUrl(meet)) return toast("The Meet link doesn't look right.", true);
-      try { await DB.add("batches/" + b.id + "/sessions", { date: $("#sd").value || today(), day: day, topic: l ? l.title : "", meetLink: meet || "", recordingUrl: "", present: [], createdAt: DB.now() }); toast("Class added."); route(); } catch (er) { fail(er); }
+      try { await DB.add("batches/" + b.id + "/sessions", { date: $("#sd").value || today(), day: day, topic: l ? l.title : "", meetLink: "", recordingUrl: "", present: [], createdAt: DB.now() }); toast("Class added."); route(); } catch (er) { fail(er); }
     };
     $$("form[data-ses]").forEach(function (f) {
       var sid = f.getAttribute("data-ses");
       var all = f.querySelector("[data-all]"); if (all) all.onclick = function () { $$('input[type=checkbox]', f).forEach(function (x) { x.checked = true; }); };
+      var none = f.querySelector("[data-none]"); if (none) none.onclick = function () { $$('input[type=checkbox]', f).forEach(function (x) { x.checked = false; }); };
       f.querySelector("[data-del]").onclick = async function () {
         if (this.dataset.confirm !== "1") { this.dataset.confirm = "1"; this.textContent = "Tap again to delete"; return; }
         try { await DB.del("batches/" + b.id + "/sessions/" + sid); toast("Class deleted."); route(); } catch (er) { fail(er); }
@@ -685,9 +803,7 @@ function tabClasses(M) {
       f.onsubmit = async function (e) {
         e.preventDefault();
         var present = $$('input[type=checkbox]:checked', f).map(function (x) { return x.value; });
-        var rec = cleanUrl($("#rec-" + sid).value), ml = cleanUrl($("#ml-" + sid).value);
-        if (rec && !isUrl(rec)) return toast("The recording link doesn't look right.", true);
-        try { await DB.update("batches/" + b.id + "/sessions/" + sid, { present: present, recordingUrl: rec || "", meetLink: ml || "" }); toast("Saved: " + present.length + " present."); route(); } catch (er) { fail(er); }
+        try { await DB.update("batches/" + b.id + "/sessions/" + sid, { present: present }); toast("Saved: " + present.length + " present."); route(); } catch (er) { fail(er); }
       };
     });
   } };
@@ -699,7 +815,7 @@ function studentStats(M, uid) {
   var subs = M.subs.filter(function (s) { return s.studentId === uid; });
   var cap = subs.filter(function (s) { return s.key === "capstone"; })[0];
   var cert = M.certs.filter(function (x) { return x.studentId === uid; })[0];
-  return { att: att, done: p ? (p.completedDays || []).length : 0, sent: subs.filter(function (s) { return s.key !== "capstone"; }).length, cap: cap, cert: cert,
+  return { att: att, done: p ? (p.completedDays || []).length : 0, sent: subs.filter(function (s) { return isDayKey(s.key); }).length, cap: cap, cert: cert,
     eligible: att.pct != null && att.pct >= 75 && cap && cap.status === "reviewed" };
 }
 function tabStudents(M) {
@@ -710,7 +826,7 @@ function tabStudents(M) {
         var x = studentStats(M, st.uid);
         var certCell = x.cert ? '<a class="hot" href="' + esc(verifyUrl(x.cert.id)) + '" target="_blank" rel="noopener">' + esc(x.cert.id) + "</a>" :
           admin ? '<button class="btn sm ' + (x.eligible ? "" : "line") + '" type="button" data-issue="' + esc(st.uid) + '">Issue</button>' : x.eligible ? chip("Eligible", "ok") : chip("Not yet", "");
-        return "<tr><td><b>" + esc(st.name) + '</b><br><span class="small muted">' + esc(st.email || "") + (st.phone ? " · " + esc(st.phone) : "") + "</span></td>" +
+        return "<tr><td><b>" + esc(st.name) + '</b> <a class="small hot" href="#/portfolio/' + esc(st.uid) + '">Portfolio</a><br><span class="small muted">' + esc(st.email || "") + (st.phone ? " · " + esc(st.phone) : "") + "</span></td>" +
           "<td>" + (x.att.pct == null ? "–" : '<span class="' + (x.att.pct < 75 ? "hot" : "") + '">' + x.att.pct + "%</span> <span class=\"small muted\">(" + x.att.present + "/" + x.att.held + ")</span>") + "</td>" +
           "<td>" + x.done + "/" + (M.lessons.length || M.c.days || 0) + "</td><td>" + x.sent + "/" + M.asg.length + "</td><td>" + (x.cap ? statusChip(x.cap) : chip("Not sent", "")) + "</td><td>" + certCell + "</td>" +
           (admin ? '<td><button class="btn danger sm" type="button" data-rm="' + esc(st.uid) + '">Remove</button></td>' : "") + "</tr>" +
@@ -768,20 +884,25 @@ function issueForm(M, st, x) {
 }
 
 function tabWork(M) {
-  var lmap = {}; M.lessons.forEach(function (l) { lmap["d" + l.day] = l.title; });
+  var lmap = {}, rmap = {}; M.lessons.forEach(function (l) { lmap["d" + l.day] = l.title; }); M.res.forEach(function (x) { rmap[x.id] = x.title; });
   var list = M.subs.slice().sort(function (a, b) {
     var w = function (s) { return s.status === "submitted" ? 0 : s.status === "redo" ? 1 : 2; };
     return w(a) - w(b) || ((b.submittedAt && b.submittedAt.seconds) || 0) - ((a.submittedAt && a.submittedAt.seconds) || 0);
   });
-  var html = list.length ? '<div class="stack">' + list.map(function (s) {
-    var label = s.key === "capstone" ? "Industry capstone" : "Day " + s.key.slice(1) + (lmap[s.key] ? " · " + lmap[s.key] : "");
-    return '<form class="card" data-sub="' + esc(s.id) + '"><div class="row" style="justify-content:space-between"><div><p class="mono">' + esc(label) + '</p><h3 style="margin-top:4px">' + esc(s.studentName) + "</h3></div>" + statusChip(s) + "</div>" +
-      '<div class="row" style="margin:12px 0">' + link(s.link, "Open submission", "btn sm") + (s.submittedAt ? '<span class="small muted">Sent ' + fmtDate(s.submittedAt) + "</span>" : "") + "</div>" +
+  var seen = {}, opts = [];
+  M.subs.forEach(function (s) { if (!seen[s.key]) { seen[s.key] = 1; opts.push(s.key); } });
+  opts.sort(function (a, b) { var n = function (k) { return isDayKey(k) ? +k.slice(1) : 1000; }; return n(a) - n(b) || String(a).localeCompare(b); });
+  var nfiles = M.subs.filter(function (s) { return s.fileId; }).length;
+  var bar = list.length ? '<div class="card row" style="margin-bottom:14px;justify-content:space-between"><div class="row"><label class="lbl" for="wk" style="margin:0">Show</label><select id="wk" style="width:auto;min-width:220px"><option value="">All assignments</option>' + opts.map(function (k) { return '<option value="' + esc(k) + '">' + esc(keyLabel(k, lmap, rmap)) + "</option>"; }).join("") + '</select></div>' +
+    (nfiles ? '<button class="btn sm" type="button" id="zipAll">Download all files (ZIP)</button>' : '<span class="small muted">No uploaded files yet.</span>') + "</div>" : "";
+  var html = list.length ? bar + '<div class="stack" id="wlist">' + list.map(function (s) {
+    return '<form class="card" data-sub="' + esc(s.id) + '" data-key="' + esc(s.key) + '"><div class="row" style="justify-content:space-between"><div><p class="mono">' + esc(keyLabel(s.key, lmap, rmap)) + '</p><h3 style="margin-top:4px">' + esc(s.studentName) + "</h3></div>" + statusChip(s) + "</div>" +
+      '<div class="row" style="margin:12px 0">' + fileBtns(s.fileId, "submissions/" + s.id, s.fileName, s.fileSize) + link(s.link, "Open link", "btn line sm") + (s.submittedAt ? '<span class="small muted">Sent ' + fmtDate(s.submittedAt) + "</span>" : "") + "</div>" +
       (s.note ? '<p class="small" style="margin-bottom:12px">Student note: ' + esc(s.note) + "</p>" : "") +
       '<div class="grid2"><div class="field"><label class="lbl" for="g-' + esc(s.id) + '">Grade</label><select id="g-' + esc(s.id) + '">' + ["", "A+", "A", "B", "C", "D"].map(function (g) { return '<option value="' + g + '"' + (s.grade === g ? " selected" : "") + ">" + (g || "No grade") + "</option>"; }).join("") + "</select></div>" +
       '<div class="field"><label class="lbl" for="f-' + esc(s.id) + '">Feedback</label><input id="f-' + esc(s.id) + '" value="' + esc(s.feedback || "") + '" maxlength="500"></div></div>' +
       '<div class="row"><button class="btn sm" type="submit" value="reviewed">Mark reviewed</button><button class="btn line sm" type="submit" value="redo">Ask to redo</button></div></form>';
-  }).join("") + "</div>" : '<div class="empty">No submissions yet. They appear here when students send their Drive links.</div>';
+  }).join("") + "</div>" : '<div class="empty">No submissions yet. They appear here when students upload a file or send a Drive link.</div>';
   return { html: html, bind: function () {
     $$("form[data-sub]").forEach(function (f) {
       f.onsubmit = async function (e) {
@@ -789,6 +910,120 @@ function tabWork(M) {
         try { await DB.update("submissions/" + id, { grade: $("#g-" + id).value, feedback: $("#f-" + id).value.trim(), status: st, reviewedAt: DB.now(), reviewedBy: ME.name || ME.email }); toast(st === "redo" ? "Sent back for redo." : "Marked reviewed."); route(); } catch (er) { fail(er); }
       };
     });
+    var sel = $("#wk"); if (!sel) return;
+    sel.onchange = function () { var k = sel.value; $$("form[data-sub]").forEach(function (f) { f.hidden = !!k && f.getAttribute("data-key") !== k; }); };
+    var zb = $("#zipAll"); if (zb) zb.onclick = async function () {
+      var k = sel.value, pick = M.subs.filter(function (x) { return x.fileId && (!k || x.key === k); });
+      if (!pick.length) return toast("No uploaded files for this selection.", true);
+      zb.disabled = true; var files = [];
+      try {
+        for (var i = 0; i < pick.length; i++) {
+          zb.textContent = "Downloading " + (i + 1) + " of " + pick.length + "…";
+          var r = await NLF.download(pick[i].fileId, "submissions/" + pick[i].id, B.auth.getToken);
+          files.push({ name: pick[i].studentName + "_" + pick[i].key + "_" + (pick[i].fileName || r.name), blob: r.blob });
+        }
+        zb.textContent = "Making ZIP…";
+        NLF.saveBlob(await NLF.zip(files), (M.b.name + (k ? "_" + k : "") + "_submissions.zip").replace(/\s+/g, "_"));
+        toast(files.length + " files downloaded.");
+      } catch (er) { fail(er); }
+      zb.disabled = false; zb.textContent = "Download all files (ZIP)";
+    };
+  } };
+}
+
+/* ---------- attendance sheet ---------- */
+function tabAttendance(M) {
+  var b = M.b, students = b.students || [], ses = M.ses.slice().sort(byDate);
+  if (!students.length || !ses.length) return { html: '<div class="empty">' + (!students.length ? "No students in this batch yet." : "Add a class first. Then you can tick who attended here.") + "</div>", bind: function () {} };
+  var t = today();
+  var head = "<tr><th>Student</th>" + ses.map(function (s) { return '<th class="ac" title="' + esc(s.topic || "") + '">Day ' + esc(s.day) + '<br><span class="small muted">' + esc(fmtDate(s.date).replace(/ \d{4}$/, "")) + "</span></th>"; }).join("") + "<th>%</th></tr>";
+  var rows = students.map(function (st) {
+    return "<tr><td><b>" + esc(st.name) + "</b></td>" + ses.map(function (s) {
+      var on = (s.present || []).indexOf(st.uid) >= 0;
+      return '<td class="ac"><button type="button" class="acell' + (on ? " on" : "") + '" data-s="' + esc(s.id) + '" data-u="' + esc(st.uid) + '" aria-pressed="' + on + '" aria-label="' + esc(st.name + ", day " + s.day) + '">' + (on ? "P" : (s.date || "") > t ? "·" : "A") + "</button></td>";
+    }).join("") + '<td class="apct" data-p="' + esc(st.uid) + '"></td></tr>';
+  }).join("");
+  var html = '<div class="card row" style="margin-bottom:14px;justify-content:space-between"><p class="small muted" style="max-width:520px">Tap a box to switch between Present (P) and Absent (A). It saves at once. Future classes show a dot.</p><button class="btn line sm" type="button" id="csv">Download CSV</button></div>' +
+    '<div class="table-wrap"><table class="atable"><thead>' + head + "</thead><tbody>" + rows + "</tbody></table></div>";
+  function pcts() { students.forEach(function (st) { var a = attendance(st.uid, M.ses), el = $('[data-p="' + st.uid + '"]'); if (el) el.innerHTML = a.pct == null ? "–" : '<span class="' + (a.pct < 75 ? "hot" : "") + '">' + a.pct + "%</span>"; }); }
+  return { html: html, bind: function () {
+    pcts();
+    $$(".acell").forEach(function (btn) {
+      btn.onclick = async function () {
+        var sid = this.getAttribute("data-s"), uid = this.getAttribute("data-u"), s = M.ses.filter(function (x) { return x.id === sid; })[0], on = (s.present || []).indexOf(uid) >= 0, me = this;
+        me.disabled = true;
+        try {
+          await DB.update("batches/" + b.id + "/sessions/" + sid, { present: on ? DB.arrayRemove(uid) : DB.arrayUnion(uid) });
+          s.present = on ? (s.present || []).filter(function (x) { return x !== uid; }) : (s.present || []).concat([uid]);
+          me.classList.toggle("on", !on); me.setAttribute("aria-pressed", String(!on)); me.textContent = !on ? "P" : (s.date || "") > t ? "·" : "A"; pcts();
+        } catch (er) { fail(er); }
+        me.disabled = false;
+      };
+    });
+    $("#csv").onclick = function () {
+      var q = function (v) { return '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"'; };
+      var lines = [["Student", "Email"].concat(ses.map(function (s) { return "Day " + s.day + " " + s.date; })).concat(["Present", "Held", "Percent"]).map(q).join(",")];
+      students.forEach(function (st) {
+        var a = attendance(st.uid, M.ses);
+        lines.push([st.name, st.email || ""].concat(ses.map(function (s) { return (s.present || []).indexOf(st.uid) >= 0 ? "P" : (s.date || "") > t ? "" : "A"; })).concat([a.present, a.held, a.pct == null ? "" : a.pct]).map(q).join(","));
+      });
+      NLF.saveBlob(new Blob(["﻿" + lines.join("\n")], { type: "text/csv" }), (b.name + "_attendance.csv").replace(/\s+/g, "_"));
+    };
+  } };
+}
+
+/* ---------- recordings ---------- */
+function allRecordings(ses, recs) {
+  var out = recs.map(function (r) { return { id: r.id, date: r.date, topic: r.topic, url: r.url, own: true }; }), seen = {};
+  out.forEach(function (r) { seen[r.url] = 1; });
+  ses.forEach(function (s) { if (isUrl(s.recordingUrl) && !seen[s.recordingUrl]) out.push({ id: "", date: s.date, topic: "Day " + s.day + (s.topic ? ": " + s.topic : ""), url: s.recordingUrl, own: false }); });
+  return out.sort(function (a, b) { return String(b.date || "").localeCompare(String(a.date || "")); });
+}
+function recCard(r, canEdit) {
+  var emb = driveEmbed(r.url);
+  return '<div class="card"><div class="row" style="justify-content:space-between"><div><p class="mono">' + fmtDate(r.date) + '</p><h3 style="margin-top:4px">' + esc(r.topic || "Class recording") + '</h3></div><div class="row">' + link(r.url, "Watch recording", "btn sm") +
+    (canEdit && r.id ? '<button class="btn danger sm" type="button" data-recdel="' + esc(r.id) + '">Delete</button>' : "") + "</div></div>" +
+    (emb ? '<details style="margin-top:10px"><summary class="small hot" style="cursor:pointer">Play here</summary><div class="video" style="margin-top:10px"><iframe src="' + esc(emb) + '" title="' + esc(r.topic || "Recording") + '" allow="autoplay; fullscreen" allowfullscreen loading="lazy"></iframe></div></details>' : "") + "</div>";
+}
+async function studentRecordings(bid) {
+  var b = await DB.get("batches/" + bid); if (!b) throw new Error("This batch was not found or you are not in it.");
+  var r = await Promise.all([DB.get("courses/" + b.courseId), data.sessions(bid), DB.list("batches/" + bid + "/recordings").catch(function () { return []; })]);
+  var list = allRecordings(r[1], r[2]), c = r[0] || { title: b.courseTitle };
+  return render('<p><a class="btn line sm" href="#/b/' + esc(bid) + '">← ' + esc(c.title) + '</a></p><div class="page-head" style="margin-top:14px"><div><h1>Class recordings</h1><p>Missed a class or want to revise? Watch it here. New recordings are also emailed to you.</p></div></div>' +
+    (list.length ? '<div class="stack">' + list.map(function (x) { return recCard(x, false); }).join("") + "</div>" : '<div class="empty">No recordings yet. Your trainer adds them after each class.</div>'));
+}
+function tabRecordings(M) {
+  var b = M.b, list = allRecordings(M.ses, M.recs), canSeed = M.b.courseId === "ansys" && window.NL_ANSYS_RECS && !M.recs.length;
+  var html = '<form class="card" id="addRec"><h3>Add a class recording</h3><p class="small muted" style="margin:4px 0 12px">Paste the Google Drive or Zoom link. Students see it under Class recordings.</p><div class="grid3">' +
+    '<div class="field"><label class="lbl" for="rd">Class date</label><input id="rd" type="date" value="' + today() + '" required></div>' +
+    '<div class="field"><label class="lbl" for="rt">Topic</label><input id="rt" required maxlength="140" placeholder="APDL 2D Plane"></div>' +
+    '<div class="field"><label class="lbl" for="ru">Recording link</label><input id="ru" type="text" inputmode="url" autocapitalize="off" spellcheck="false" required placeholder="https://drive.google.com/file/d/..."></div></div>' +
+    '<label class="row small" style="margin-bottom:12px"><input type="checkbox" id="rmail"' + (NLF.enabled() ? " checked" : " disabled") + '> Email this recording to all ' + (b.studentIds || []).length + ' students</label><button class="btn" type="submit">Add recording</button></form>' +
+    (canSeed ? '<div class="card next" style="margin-top:14px"><div><h3>Import the ANSYS recordings from your sheet</h3><p class="small muted" style="margin-top:4px">Adds the 9 recordings (18 Aug to 8 Sep). No email is sent.</p></div><button class="btn" type="button" id="seedRec">Import 9 recordings</button></div>' : "") +
+    '<h2 style="margin:24px 0 12px">Recordings (' + list.length + ")</h2>" + (list.length ? '<div class="stack">' + list.map(function (x) { return recCard(x, true); }).join("") + "</div>" : '<div class="empty">No recordings yet.</div>');
+  return { html: html, bind: function () {
+    $("#addRec").onsubmit = async function (e) {
+      e.preventDefault(); var u = cleanUrl($("#ru").value); if (!isUrl(u)) return toast("The recording link doesn't look right.", true);
+      var rec = { date: $("#rd").value, topic: $("#rt").value.trim(), url: u, createdAt: DB.now(), createdBy: ME.name || ME.email }, btn = this.querySelector("button[type=submit]"); btn.disabled = true;
+      try {
+        await DB.add("batches/" + b.id + "/recordings", rec);
+        var msg = "Recording added.";
+        if ($("#rmail").checked) {
+          try { var j = await NLF.api({ action: "mailRecording", token: await B.auth.getToken(), batchId: b.id, topic: rec.topic, url: u, date: rec.date }); msg += " Emailed " + j.sent + " student" + (j.sent === 1 ? "" : "s") + "."; }
+          catch (er) { msg += " The email could not be sent: " + er.message; }
+        }
+        toast(msg); route();
+      } catch (er) { fail(er); btn.disabled = false; }
+    };
+    var sd = $("#seedRec"); if (sd) sd.onclick = async function () {
+      sd.disabled = true;
+      try { await DB.batchWrite(window.NL_ANSYS_RECS.map(function (r, i) { return { type: "set", path: "batches/" + b.id + "/recordings/ansys" + (i + 1), data: { date: r.date, topic: r.topic, url: r.url, createdAt: DB.now(), createdBy: ME.name || ME.email } }; })); toast("9 recordings imported."); route(); }
+      catch (er) { fail(er); sd.disabled = false; }
+    };
+    $$("[data-recdel]").forEach(function (x) { x.onclick = async function () {
+      if (this.dataset.confirm !== "1") { this.dataset.confirm = "1"; this.textContent = "Tap to confirm"; return; }
+      try { await DB.del("batches/" + b.id + "/recordings/" + this.getAttribute("data-recdel")); toast("Recording deleted."); route(); } catch (er) { fail(er); }
+    }; });
   } };
 }
 
@@ -800,7 +1035,7 @@ async function tabSettings(M) {
       '<div class="field"><label class="lbl" for="bt">Trainer</label><select id="bt"><option value="">Not assigned</option>' + trainers.map(function (t) { return '<option value="' + esc(t.id) + '"' + (t.id === b.trainerId ? " selected" : "") + ">" + esc(t.name) + (t.role === "admin" ? " (admin)" : "") + "</option>"; }).join("") + "</select></div>" +
       '<div class="field"><label class="lbl" for="bs">Start date</label><input id="bs" type="date" value="' + esc(b.startDate || "") + '"></div>' : "") +
     '<div class="field"><label class="lbl" for="bti">Timing</label><input id="bti" value="' + esc(b.timing || "") + '" placeholder="Mon–Fri · 8–10 PM IST"></div>' +
-    '<div class="field"><label class="lbl" for="bm">Default Google Meet link</label><input id="bm" type="text" inputmode="url" autocapitalize="off" spellcheck="false" value="' + esc(b.meetLink || "") + '" placeholder="https://meet.google.com/..."></div>' +
+    '<div class="field"><label class="lbl" for="bm">Meeting link (same for the whole course)</label><input id="bm" type="text" inputmode="url" autocapitalize="off" spellcheck="false" value="' + esc(b.meetLink || "") + '" placeholder="https://meet.google.com/..."></div>' +
     '<div class="field"><label class="lbl" for="bst">Status</label><select id="bst"><option value="running"' + (b.status !== "completed" ? " selected" : "") + '>Running</option><option value="completed"' + (b.status === "completed" ? " selected" : "") + ">Completed</option></select></div></div>" +
     '<div class="row"><button class="btn" type="submit">Save settings</button>' + (admin ? '<button class="btn danger" type="button" id="bdel">Delete batch</button>' : "") + "</div></form>";
   return { html: html, bind: function () {
@@ -901,9 +1136,49 @@ async function coursesView() {
   });
 }
 
+function secOpts(sel) { return SECTIONS.map(function (x) { return '<option value="' + x[0] + '"' + (x[0] === sel ? " selected" : "") + ">" + esc(x[1]) + "</option>"; }).join(""); }
+function resPanel(cid, list) {
+  var seed = cid === "ansys" && !list.length && window.NL_ANSYS_RES;
+  return '<h2 style="margin:30px 0 8px">Course resources</h2><p class="muted small" style="max-width:640px">Links, quizzes, notes and assignments students see under Course resources. An item marked Assignment lets students upload their file.</p>' +
+    (seed ? '<div class="card next" style="margin:14px 0"><div><h3>Load the ANSYS resources from your sheet</h3><p class="small muted" style="margin-top:4px">Software links, notes, 8 quizzes, exams, APDL / Workbench / CFD assignments and the final project (' + window.NL_ANSYS_RES.length + ' items).</p></div><button class="btn" type="button" id="seedRes">Load ' + window.NL_ANSYS_RES.length + " items</button></div>" : "") +
+    '<form class="card" id="addRes" style="margin:14px 0"><h3>Add a resource</h3><div class="grid3" style="margin-top:12px"><div class="field"><label class="lbl">Section</label><select name="section">' + secOpts("notes") + '</select></div><div class="field"><label class="lbl">Title</label><input name="title" required maxlength="120"></div><div class="field"><label class="lbl">Link (optional)</label><input name="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false"></div></div>' +
+    '<label class="row small" style="margin-bottom:12px"><input type="checkbox" name="asg"> This is an assignment (students upload a file)</label><button class="btn sm" type="submit">Add</button></form>' +
+    list.map(function (x) {
+      return '<details class="edit"><summary><span class="n">' + esc((SECTIONS.filter(function (z) { return z[0] === x.section; })[0] || ["", x.section])[1].split(" ")[0].toUpperCase().slice(0, 7)) + '</span><span class="t">' + esc(x.title) + "</span>" + (x.kind === "assignment" ? chip(x.status === "closed" ? "Closed" : "Assignment", x.status === "closed" ? "bad" : "hot") : "") + (isUrl(x.url) ? "" : chip("No link", "warn")) + "</summary>" +
+        '<div class="body"><form data-res="' + esc(x.id) + '"><div class="grid2"><div class="field"><label class="lbl">Title</label><input name="title" value="' + esc(x.title) + '" required></div><div class="field"><label class="lbl">Section</label><select name="section">' + secOpts(x.section) + "</select></div>" +
+        '<div class="field"><label class="lbl">Link</label><input name="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" value="' + esc(x.url || "") + '"></div><div class="field"><label class="lbl">Reference / model link</label><input name="refUrl" type="text" inputmode="url" autocapitalize="off" spellcheck="false" value="' + esc(x.refUrl || "") + '"></div>' +
+        '<div class="field"><label class="lbl">Type</label><select name="kind"><option value="link"' + (x.kind !== "assignment" ? " selected" : "") + '>Link only</option><option value="assignment"' + (x.kind === "assignment" ? " selected" : "") + '>Assignment (students upload)</option></select></div><div class="field"><label class="lbl">Status</label><select name="status"><option value="open"' + (x.status !== "closed" ? " selected" : "") + '>Open</option><option value="closed"' + (x.status === "closed" ? " selected" : "") + ">Closed</option></select></div></div>" +
+        '<div class="field"><label class="lbl">Note for students</label><textarea name="desc" rows="2">' + esc(x.desc || "") + '</textarea></div><div class="row"><button class="btn sm" type="submit">Save</button><button class="btn danger sm" type="button" data-resdel>Delete</button></div></form></div></details>';
+    }).join("");
+}
+function bindRes(cid, list) {
+  var sd = $("#seedRes"); if (sd) sd.onclick = async function () {
+    sd.disabled = true;
+    try { await DB.batchWrite(window.NL_ANSYS_RES.map(function (x) { var d = Object.assign({}, x); delete d.id; return { type: "set", path: "courses/" + cid + "/resources/" + x.id, data: d }; })); toast("ANSYS resources loaded."); route(); }
+    catch (er) { fail(er); sd.disabled = false; }
+  };
+  var af = $("#addRes"); if (af) af.onsubmit = async function (e) {
+    e.preventDefault(); var g = function (n) { return af.querySelector("[name=" + n + "]"); }, u = cleanUrl(g("url").value);
+    if (u && !isUrl(u)) return toast("The link doesn't look right.", true);
+    try { await DB.add("courses/" + cid + "/resources", { section: g("section").value, title: g("title").value.trim(), url: u || "", refUrl: "", desc: "", kind: g("asg").checked ? "assignment" : "link", status: "open", order: 500 + list.length }); toast("Added."); route(); } catch (er) { fail(er); }
+  };
+  $$("form[data-res]").forEach(function (f) {
+    var id = f.getAttribute("data-res"), g = function (n) { return f.querySelector("[name=" + n + "]"); };
+    f.onsubmit = async function (e) {
+      e.preventDefault(); var u = cleanUrl(g("url").value), ru = cleanUrl(g("refUrl").value);
+      if ((u && !isUrl(u)) || (ru && !isUrl(ru))) return toast("One of the links doesn't look right.", true);
+      try { await DB.update("courses/" + cid + "/resources/" + id, { title: g("title").value.trim(), section: g("section").value, url: u || "", refUrl: ru || "", kind: g("kind").value, status: g("status").value, desc: g("desc").value.trim() }); toast("Saved."); route(); } catch (er) { fail(er); }
+    };
+    f.querySelector("[data-resdel]").onclick = async function () {
+      if (this.dataset.confirm !== "1") { this.dataset.confirm = "1"; this.textContent = "Tap to confirm"; return; }
+      try { await DB.del("courses/" + cid + "/resources/" + id); toast("Deleted."); route(); } catch (er) { fail(er); }
+    };
+  });
+}
 async function courseEditor(cid) {
-  var r = await Promise.all([DB.get("courses/" + cid), data.lessons(cid), data.assignments(cid)]);
+  var r = await Promise.all([DB.get("courses/" + cid), data.lessons(cid), data.assignments(cid), DB.list("courses/" + cid + "/resources").catch(function () { return []; })]);
   var c = r[0]; if (!c) throw new Error("Course not found.");
+  var resList = r[3].sort(byOrder);
   var amap = {}; r[2].forEach(function (a) { amap[a.day] = a; });
   var admin = ME.role === "admin";
   var html = '<p><a class="btn line sm" href="#/courses">← Courses</a></p><div class="page-head" style="margin-top:14px"><div><p class="mono">' + esc(c.code) + " · " + esc(c.days) + " days · " + esc(c.hours) + " hrs</p><h1>" + esc(c.title) + "</h1><p>Open a day to add its video, notes, files and assignment. Students see changes at once.</p></div></div>" +
@@ -918,8 +1193,9 @@ async function courseEditor(cid) {
         '<div class="field"><label class="lbl">Assignment title</label><input name="atitle" value="' + esc(a.title || "Day " + l.day + " practice") + '"></div>' +
         '<div class="field"><label class="lbl">Assignment instructions</label><textarea name="ainst" rows="3">' + esc(a.instructions || "") + "</textarea></div>" +
         '<button class="btn sm" type="submit">Save day ' + l.day + "</button></form></div></details>";
-    }).join("");
+    }).join("") + resPanel(cid, resList);
   render(html, function () {
+    bindRes(cid, resList);
     if (admin) $("#capf").onsubmit = async function (e) { e.preventDefault(); try { await DB.update("courses/" + cid, { capstone: $("#capt").value.trim() }); toast("Capstone saved."); } catch (er) { fail(er); } };
     else $("#capf").onsubmit = function (e) { e.preventDefault(); };
     $$("form[data-day]").forEach(function (f) {

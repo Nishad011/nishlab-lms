@@ -12,6 +12,9 @@ const firebaseConfig = {
   measurementId: "G-214K2GDS8T"
 };
 
+// File service (Google Drive via Apps Script). Paste the web app URL here after deploying it.
+window.LMS_FILES_URL = window.LMS_FILES_URL || "https://script.google.com/macros/s/AKfycbzpclFIJVo_LjHCzWBCtFGtx9LJq-WVWkSdhlTlXDhSqk_7bcR5DvPs6vNLfjTJeDx9/exec";
+
 // Small data layer so the app never talks to Firebase directly.
 // (Makes the app easy to test and to move to another backend later.)
 (function () {
@@ -33,7 +36,8 @@ const firebaseConfig = {
       signIn: (email, pw) => auth.signInWithEmailAndPassword(email, pw).then((c) => ({ uid: c.user.uid, email: c.user.email })),
       signUp: (email, pw) => auth.createUserWithEmailAndPassword(email, pw).then((c) => ({ uid: c.user.uid, email: c.user.email })),
       reset: (email) => auth.sendPasswordResetEmail(email),
-      signOut: () => auth.signOut()
+      signOut: () => auth.signOut(),
+      getToken: () => (auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(""))
     },
     db: {
       get: async (path) => snapDoc(await db.doc(path).get()),

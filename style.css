@@ -282,3 +282,18 @@ details.edit .body{padding:4px 18px 18px}
 @media (max-width:600px){details.edit summary{flex-wrap:wrap;gap:8px 12px}details.edit summary .t{flex:1 1 calc(100% - 70px)}details.edit summary .chip{margin-left:66px}details.edit summary .chip+.chip{margin-left:0}}
 .cert{background:linear-gradient(135deg,rgba(192,108,242,.22),var(--panel) 60%)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* v2.2: files, attendance sheet, 3D viewer */
+.filebar{display:inline-flex;gap:8px;flex-wrap:wrap;align-items:center}
+.atable th.ac,.atable td.ac{text-align:center;padding:6px 4px;min-width:54px}
+.atable td.apct{font-weight:700;white-space:nowrap}
+.acell{width:38px;height:34px;border-radius:10px;border:1px solid var(--line);background:#1f2148;color:var(--muted);font:inherit;font-weight:700;cursor:pointer}
+.acell.on{background:rgba(62,207,142,.18);border-color:rgba(62,207,142,.6);color:var(--ok)}
+.acell:disabled{opacity:.5}
+.v3{position:fixed;inset:0;z-index:100;background:#12132d;display:flex;flex-direction:column}
+.v3-bar{display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.v3-bar b{flex:0 1 auto;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v3-msg{flex:1;color:var(--muted);font-size:.86rem}
+.v3-stage{flex:1;position:relative;min-height:0;background:radial-gradient(90% 80% at 50% 30%,#2e3070,#12132d)}
+.v3-stage canvas{width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+.pcard .filebar{margin-top:2px}

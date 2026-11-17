@@ -38,6 +38,11 @@ service cloud.firestore {
         allow read: if signedIn();
         allow write: if isAdmin() || isTrainer();
       }
+      // links, quizzes, notes and assignments shown under "Course resources"
+      match /resources/{resId} {
+        allow read: if signedIn();
+        allow write: if isAdmin() || isTrainer();
+      }
     }
 
     // ---------- Batches ----------
@@ -52,6 +57,12 @@ service cloud.firestore {
 
       // classes held for the batch, with attendance
       match /sessions/{sessionId} {
+        allow read: if isAdmin() || isBatchTrainer(batchId) || inBatch(batchId);
+        allow write: if isAdmin() || isBatchTrainer(batchId);
+      }
+
+      // class recording links
+      match /recordings/{recId} {
         allow read: if isAdmin() || isBatchTrainer(batchId) || inBatch(batchId);
         allow write: if isAdmin() || isBatchTrainer(batchId);
       }
@@ -95,6 +106,19 @@ service cloud.firestore {
                     && inBatch(request.resource.data.batchId)
                     && request.resource.data.trainerId == batch(request.resource.data.batchId).trainerId;
       allow delete: if isAdmin();
+    }
+
+    // ---------- Student portfolio (3D models) ----------
+    // private to the student, trainers and admin unless the student marks an item public
+    match /portfolio/{pid} {
+      allow get, list: if resource.data.public == true
+                       || isAdmin() || isTrainer()
+                       || (signedIn() && resource.data.studentId == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.studentId == request.auth.uid;
+      allow update: if isAdmin()
+                    || (signedIn() && resource.data.studentId == request.auth.uid
+                        && request.resource.data.studentId == request.auth.uid);
+      allow delete: if isAdmin() || (signedIn() && resource.data.studentId == request.auth.uid);
     }
 
     // ---------- Certificates ----------

@@ -139,6 +139,7 @@ B.auth.onChange(async function (u) {
       return;
     }
     buildNav(); route();
+    if (window.NL_ANSYS_PLAN) ansysMenu();
   } catch (e) { view.innerHTML = '<div class="err-box">' + esc(friendly(e)) + "</div>"; }
 });
 function showWho(p) {
@@ -173,11 +174,12 @@ function buildNav() {
   $("#side").innerHTML = (NAV[ME.role] || NAV.student).map(function (n) { return '<a href="' + n[0] + '">' + ico(n[1]) + "<span>" + esc(n[2]) + "</span></a>"; }).join("");
 }
 function markNav(h) {
-  $$("#side a").forEach(function (a) {
+  $$("#side > a").forEach(function (a) {
     var href = a.getAttribute("href"), inBatch = h.indexOf("#/b/") === 0;
     var on = inBatch ? (ME.role === "admin" ? href === "#/batches" : href === "#/") : href === "#/" ? (h === "#/" || h === "") : h.indexOf(href) === 0;
     a.classList.toggle("on", on); if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
+  if (typeof markDm === "function") markDm(h);
 }
 window.addEventListener("hashchange", function () { if (ME) route(); });
 var routeToken = 0;
@@ -195,6 +197,7 @@ async function route() {
       else fn = function () { return manageBatch(parts[1], parts[2] || "classes"); };
     }
     else if (parts[0] === "portfolio" && parts[1] && r !== "student") fn = function () { return portfolioOf(parts[1]); };
+    else if (parts[0] === "ansys" && AP) fn = function () { return ansysRoute(parts); };
     else if (parts[0] === "certs") fn = r === "admin" ? adminCerts : studentCerts;
     else if (parts[0] === "profile") fn = profileView;
     else if (parts[0] === "courses" && r !== "student") fn = coursesView;
@@ -1183,6 +1186,7 @@ async function courseEditor(cid) {
   var admin = ME.role === "admin";
   var html = '<p><a class="btn line sm" href="#/courses">← Courses</a></p><div class="page-head" style="margin-top:14px"><div><p class="mono">' + esc(c.code) + " · " + esc(c.days) + " days · " + esc(c.hours) + " hrs</p><h1>" + esc(c.title) + "</h1><p>Open a day to add its video, notes, files and assignment. Students see changes at once.</p></div></div>" +
     '<form class="card" id="capf" style="margin-bottom:18px"><label class="lbl" for="capt">Industry capstone brief</label><textarea id="capt" rows="3"' + (admin ? "" : " disabled") + ">" + esc(c.capstone || "") + "</textarea>" + (admin ? '<button class="btn sm" type="submit" style="margin-top:10px">Save capstone</button>' : '<p class="small muted" style="margin-top:6px">Only the admin can change the capstone.</p>') + "</form>" +
+    (cid === "ansys" && window.NL_ANSYS_PLAN ? ansysSeedCard() : "") +
     r[1].map(function (l) {
       var a = amap[l.day] || {};
       return '<details class="edit"><summary><span class="n">DAY ' + String(l.day).padStart(2, "0") + '</span><span class="t">' + esc(l.title) + "</span>" + (l.videoUrl ? chip("Video", "ok") : chip("No video", "warn")) + "</summary>" +
@@ -1195,7 +1199,7 @@ async function courseEditor(cid) {
         '<button class="btn sm" type="submit">Save day ' + l.day + "</button></form></div></details>";
     }).join("") + resPanel(cid, resList);
   render(html, function () {
-    bindRes(cid, resList);
+    bindRes(cid, resList); bindAnsysSeed(cid);
     if (admin) $("#capf").onsubmit = async function (e) { e.preventDefault(); try { await DB.update("courses/" + cid, { capstone: $("#capt").value.trim() }); toast("Capstone saved."); } catch (er) { fail(er); } };
     else $("#capf").onsubmit = function (e) { e.preventDefault(); };
     $$("form[data-day]").forEach(function (f) {
@@ -1274,4 +1278,174 @@ async function adminCerts() {
     }; });
   });
 }
+
+/* ======================================================================
+   ANSYS DAY-WISE PLAN (menu, day pages, quizzes, trainer tools)
+   Content lives in ansys-days.js (window.NL_ANSYS_PLAN).
+   ====================================================================== */
+var AP = window.NL_ANSYS_PLAN, ANS = { bid: null };
+var A_TAG = { asg: "Assignment", quiz: "Quiz", prj: "Project" };
+function aDay(n) { return AP.days[n - 1]; }
+function aTaskHref(t, n) { return t.t === "quiz" ? "#/ansys/quiz/" + t.id : t.t === "prj" ? "#/ansys/project" : "#/ansys/" + n; }
+function aAsgOf(n) { var d = aDay(n), t = d && d.tasks.filter(function (x) { return x.t !== "quiz"; })[0]; return t || null; }
+function aList(a) { return a.map(function (s, i) { return (i + 1) + ". " + s; }).join("\n"); }
+function aInstr(id) {
+  var a = AP.asg[id];
+  return "Goal: " + a.goal + "\nGiven: " + a.given + "\n\nSTEPS\n" + aList(a.steps) +
+    "\n\nCHECK VALUES (match your result)\n" + a.check.map(function (c) { return "- " + c[0] + ": " + c[1]; }).join("\n") +
+    "\n\n5 CASE CONDITIONS (run all)\n" + a.cases.map(function (c, i) { return (i + 1) + ". " + c[0] + " -> " + c[1]; }).join("\n") +
+    "\n\n5 SUBMISSION RULES\n" + aList(a.rules);
+}
+function aDaySeed(n) {
+  var d = aDay(n), t = aAsgOf(n), P = AP.project, title, ins;
+  if (!t) { title = "Day " + n + " practice"; ins = "Hand-solve a one-element bar (A = 100 mm2, L = 500 mm, E = 200 000 MPa, F = 10 000 N), then solve it in APDL and compare. Share your file as a Google Drive link."; }
+  else if (t.t === "prj" && t.id === "P1") { title = "Final project: proposal and model setup"; ins = "Goal: " + P.goal + "\n\nSTEPS TO FINISH BY TODAY\n" + aList(P.steps.slice(0, 6)) + "\n\n5 CONDITIONS (all required)\n" + aList(P.conditions); }
+  else if (t.t === "prj") { title = "Final project: report and viva"; ins = "STEPS\n" + aList(P.steps.slice(6)) + "\n\n5 SUBMISSION RULES\n" + aList(P.rules) + "\n\nMARKING (100)\n" + P.marking.map(function (m) { return "- " + m[0] + ": " + m[1]; }).join("\n"); }
+  else if (t.id === "W1a") { var a = AP.asg.W1; title = "Workbench Assignment 1 (start): static structural"; ins = "Goal: " + a.goal + "\nGiven: " + a.given + "\n\nTODAY: do the static part only\n" + aList(a.steps.slice(0, 8)) + "\n\nThe transient part is done on Day 7."; }
+  else { title = AP.asg[t.ref].grp + " Assignment: " + AP.asg[t.ref].title; ins = aInstr(t.ref); }
+  var notes = d.mod + " module\nLecture plan (2 hours)\n" + d.topics.map(function (x) { return "- " + x[0] + ": " + x[1]; }).join("\n") + "\n\nToday's tasks\n" + d.tasks.map(function (x) { return "- " + A_TAG[x.t] + ": " + x.label; }).join("\n");
+  return { title: d.title, notes: notes, atitle: title, ainst: ins };
+}
+async function ansysMenu() {
+  if (!AP || !ME) return;
+  var bs = []; try { bs = await data.myBatches(); } catch (e) {}
+  var ab = bs.filter(function (b) { return b.courseId === "ansys"; }).sort(function (a, b) { return (a.status === "completed") - (b.status === "completed"); })[0];
+  if (!ab && ME.role !== "admin") return;
+  ANS.bid = ab ? ab.id : null;
+  var stu = ME.role === "student" || ME.role === "admin", trn = ME.role !== "student", bid = ANS.bid, L = function (h, t) { return '<a href="' + h + '">' + esc(t) + "</a>"; };
+  var h = '<a class="dm-m" href="#/ansys">' + ico("cal") + "<span>ANSYS days</span></a><div class=\"dm\">";
+  if (stu) h += '<p class="dm-h">ANSYS · Student</p>' + L("#/ansys", "Day-wise plan") + L("#/ansys/quizzes", "Quizzes") + L("#/ansys/project", "Final project") + (bid ? L("#/b/" + bid + "/res", "Course resources") + L("#/b/" + bid + "/rec", "Class recordings") + L("#/b/" + bid, "My submissions") : "");
+  if (trn) h += '<p class="dm-h">ANSYS · Trainer</p>' + L("#/ansys", "Lesson plan") + L("#/ansys/keys", "Quiz answer keys") + L("#/ansys/rubric", "Marking and rubrics") + (bid ? L("#/b/" + bid + "/work", "Review submissions") + L("#/b/" + bid + "/classes", "Classes and attendance") : "") + L("#/c/ansys", "Course content");
+  h += '<p class="dm-h">Days · tasks</p>' + AP.days.map(function (d) {
+    return '<details class="dm-day" data-day="' + d.n + '"><summary><b>Day ' + d.n + "</b><span>" + esc(d.mod) + "</span></summary>" +
+      '<a href="#/ansys/' + d.n + '" class="dm-open">' + esc(d.title) + "</a>" +
+      d.tasks.map(function (t) { return '<a href="' + aTaskHref(t, d.n) + '"><i class="dm-t ' + t.t + '">' + (t.t === "asg" ? "ASG" : t.t === "quiz" ? "QUIZ" : "PROJ") + "</i>" + esc(t.label) + "</a>"; }).join("") + "</details>";
+  }).join("") + "</div>";
+  $("#side").insertAdjacentHTML("beforeend", h);
+  markNav(location.hash || "#/");
+}
+function markDm(h) {
+  $$("#side .dm a").forEach(function (a) { a.classList.toggle("cur", a.getAttribute("href") === h); });
+  var m = h.match(/^#\/ansys\/(\d+)$/) || h.match(/^#\/b\/[^/]+\/d\/(\d+)$/);
+  if (m) { var d = $('#side .dm-day[data-day="' + m[1] + '"]'); if (d) d.open = true; }
+}
+function aBack(t, h) { return '<p><a class="btn line sm" href="' + h + '">← ' + esc(t) + "</a></p>"; }
+function aOl(a) { return "<ol>" + a.map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ol>"; }
+function aTbl(head, rows) { return '<div class="table-wrap"><table><thead><tr>' + head.map(function (x) { return "<th>" + esc(x) + "</th>"; }).join("") + "</tr></thead><tbody>" + rows.map(function (r) { return "<tr>" + r.map(function (c, i) { return i ? "<td>" + esc(c) + "</td>" : "<td><b>" + esc(c) + "</b></td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table></div>"; }
+function aTaskChips(d) { return d.tasks.map(function (t) { return '<a class="chip ' + (t.t === "quiz" ? "warn" : t.t === "prj" ? "hot" : "") + '" href="' + aTaskHref(t, d.n) + '" title="' + esc(t.label) + '">' + esc(t.id.replace("W1a", "W1")) + "</a>"; }).join(" "); }
+
+async function ansysOverview() {
+  var done = [], subs = {};
+  if (ANS.bid) {
+    try { var p = await data.progress(ANS.bid); done = (p[0] && p[0].completedDays) || []; } catch (e) {}
+    try { (await data.submissions(ANS.bid)).forEach(function (s) { if (ME.role === "student" || true) subs[s.key] = subs[s.key] || s; }); } catch (e) {}
+  }
+  var stu = ME.role === "student";
+  render('<div class="page-head"><div><p class="mono">ANSYS · 18 days · 36 hours</p><h1>Day-wise plan</h1><p>Every lecture, assignment, quiz and the final project, day by day. Open a day to see the steps, case conditions and how to submit.</p></div></div>' +
+    '<div class="stats"><div class="stat"><b>18</b><span>class days</span></div><div class="stat"><b>14</b><span>assignments</span></div><div class="stat"><b>8</b><span>quizzes</span></div><div class="stat"><b>1</b><span>final project</span></div></div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Day</th><th>Module</th><th>Topic</th><th>Tasks</th>' + (stu && ANS.bid ? "<th>Status</th>" : "") + "</tr></thead><tbody>" +
+    AP.days.map(function (d) {
+      var sub = stu ? subs["d" + d.n] : null, dn = done.indexOf(d.n) >= 0;
+      return '<tr><td><a class="hot" href="#/ansys/' + d.n + '"><b>' + (dn ? "✓ " : "") + "Day " + d.n + "</b></a></td><td>" + esc(d.mod) + '</td><td><a href="#/ansys/' + d.n + '">' + esc(d.title) + "</a></td><td>" + aTaskChips(d) + "</td>" +
+        (stu && ANS.bid ? "<td>" + (sub ? statusChip(sub) : "") + "</td>" : "") + "</tr>";
+    }).join("") + "</tbody></table></div>");
+}
+async function ansysDay(n) {
+  var d = aDay(n); if (!d) return render('<div class="empty">Day not found. <a href="#/ansys">Day-wise plan</a></div>');
+  var bid = ANS.bid, stu = ME.role === "student", sub = null;
+  if (bid && stu) { try { (await data.submissions(bid)).forEach(function (s) { if (s.key === "d" + n) sub = s; }); } catch (e) {} }
+  var h = aBack("Day-wise plan", "#/ansys") + '<div class="page-head" style="margin-top:14px"><div><p class="mono">Day ' + String(n).padStart(2, "0") + " of 18 · " + esc(d.mod) + "</p><h1>" + esc(d.title) + "</h1><p>9:00 to 11:00 PM class · 2 hours</p></div>" +
+    (bid && stu ? '<a class="btn" href="#/b/' + esc(bid) + "/d/" + n + '">Submit / my work</a>' : bid ? '<a class="btn" href="#/b/' + esc(bid) + '/work">Review submissions</a>' : "") + "</div>" +
+    '<div class="stack"><div class="card"><h3>Lecture plan</h3><div style="margin-top:10px">' + d.topics.map(function (t) { return '<div class="row" style="padding:7px 0;border-bottom:1px solid var(--line)"><b class="mono" style="min-width:64px">' + esc(t[0]) + "</b><span>" + esc(t[1]) + "</span></div>"; }).join("") + "</div></div>" +
+    '<div class="card"><h3>Tasks for this day</h3><div style="margin-top:10px">' + d.tasks.map(function (t) {
+      return '<div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)"><span>' + chip(A_TAG[t.t], t.t === "quiz" ? "warn" : t.t === "prj" ? "hot" : "") + " <b>" + esc(t.label) + "</b>" + (t.note ? ' <span class="small muted">· ' + esc(t.note) + "</span>" : "") + "</span>" +
+        (t.t === "quiz" ? '<a class="btn sm" href="#/ansys/quiz/' + t.id + '">' + (stu ? "Take quiz" : "Open quiz") + "</a>" : t.t === "prj" ? '<a class="btn sm" href="#/ansys/project">Project brief</a>' : '<a class="btn line sm" href="#a-' + t.ref + '" data-jump="a-' + t.ref + '">Steps below</a>') + "</div>";
+    }).join("") + (sub ? '<p style="margin-top:10px">Your submission: ' + statusChip(sub) + "</p>" : "") + "</div></div>";
+  d.tasks.forEach(function (t) {
+    if (t.t !== "asg") return;
+    var a = AP.asg[t.ref], steps = t.id === "W1a" ? a.steps.slice(0, 8) : a.steps;
+    h += '<div class="card" id="a-' + t.ref + '"><p class="mono">' + esc(a.grp) + " assignment" + (t.id === "W1a" ? " · start today, submit on Day 7" : "") + "</p><h3 style=\"margin-top:4px\">" + esc(a.title) + "</h3><p style=\"margin-top:8px\"><b>Goal:</b> " + esc(a.goal) + "</p><p style=\"margin-top:6px\"><b>Given:</b> " + esc(a.given) + "</p>" +
+      '<h4 class="dm-sub">Complete steps</h4>' + aOl(steps) +
+      '<h4 class="dm-sub">Check values: your result should match</h4>' + aTbl(["Quantity", "Expected"], a.check) +
+      '<h4 class="dm-sub">5 case conditions: run all</h4>' + aTbl(["Condition", "Expected result"], a.cases) +
+      '<h4 class="dm-sub">5 submission rules</h4>' + aOl(a.rules) + "</div>";
+  });
+  h += '<div class="row" style="justify-content:space-between">' + (n > 1 ? '<a class="btn line sm" href="#/ansys/' + (n - 1) + '">← Day ' + (n - 1) + "</a>" : "<span></span>") + (n < 18 ? '<a class="btn line sm" href="#/ansys/' + (n + 1) + '">Day ' + (n + 1) + " →</a>" : "") + "</div></div>";
+  render(h, function () { $$("[data-jump]").forEach(function (a) { a.onclick = function (e) { e.preventDefault(); var el = document.getElementById(this.getAttribute("data-jump")); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }; }); });
+}
+function ansysQuizzes() {
+  var rows = [];
+  AP.days.forEach(function (d) { d.tasks.forEach(function (t) { if (t.t === "quiz") rows.push('<tr><td><a class="hot" href="#/ansys/quiz/' + t.id + '"><b>' + esc(t.id.replace("Q", "Quiz ")) + "</b></a></td><td>" + esc(AP.quiz[t.id].title) + '</td><td><a href="#/ansys/' + d.n + '">Day ' + d.n + '</a></td><td><a class="btn sm" href="#/ansys/quiz/' + t.id + '">Open</a></td></tr>'); }); });
+  render('<div class="page-head"><div><p class="mono">8 quizzes · 5 questions each</p><h1>ANSYS quizzes</h1><p>Practice quizzes with instant marking. Scores are for your own check and are not saved.</p></div></div><div class="table-wrap"><table><thead><tr><th>Quiz</th><th>Topic</th><th>Day</th><th></th></tr></thead><tbody>' + rows.join("") + "</tbody></table></div>");
+}
+function ansysQuiz(id) {
+  var Q = AP.quiz[id]; if (!Q) return ansysQuizzes();
+  var day = 0; AP.days.forEach(function (d) { d.tasks.forEach(function (t) { if (t.id === id) day = d.n; }); });
+  var key = ME.role !== "student", L = "ABCD";
+  render(aBack("All quizzes", "#/ansys/quizzes") + '<div class="page-head" style="margin-top:14px"><div><p class="mono">' + esc(id.replace("Q", "Quiz ")) + " · Day " + day + "</p><h1>" + esc(Q.title) + "</h1><p>" + (key ? "Trainer view: correct answers are shown." : "Pick one answer for each question, then check your score.") + "</p></div></div>" +
+    '<div class="stack" id="qz">' + Q.qs.map(function (q, i) {
+      return '<div class="card" data-q="' + i + '"><h3>' + (i + 1) + ". " + esc(q[0]) + '</h3><div style="margin-top:10px;display:grid;gap:6px">' + q[1].map(function (c, j) { return '<label class="row small" style="gap:10px;align-items:flex-start"><input type="radio" name="q' + i + '" value="' + j + '"' + (key && j === q[2] ? " checked" : "") + "> <span>" + L[j] + ". " + esc(c) + "</span></label>"; }).join("") + "</div>" +
+        '<p class="small ans" style="margin-top:10px;' + (key ? "" : "display:none") + '"><b class="hot">Answer ' + L[q[2]] + ": " + esc(q[1][q[2]]) + ".</b> " + esc(q[3]) + "</p></div>";
+    }).join("") + (key ? "" : '<div class="row"><button class="btn" type="button" id="qsub">Check my score</button><b id="qres"></b></div>') + "</div>",
+    function () {
+      var b = $("#qsub"); if (!b) return;
+      b.onclick = function () {
+        var sc = 0; Q.qs.forEach(function (q, i) {
+          var c = $('[data-q="' + i + '"]'), s = c.querySelector("input:checked"), ok = s && +s.value === q[2]; if (ok) sc++;
+          c.style.outline = "1px solid " + (ok ? "#3ecf8e" : "#ef5a6f"); c.querySelector(".ans").style.display = "block";
+        });
+        $("#qres").textContent = "Score: " + sc + " / " + Q.qs.length; b.textContent = "Check again";
+      };
+    });
+}
+function ansysKeys() {
+  if (ME.role === "student") return render('<div class="empty">Answer keys are for trainers.</div>');
+  render('<div class="page-head"><div><p class="mono">Trainer only</p><h1>Quiz answer keys</h1><p>All 8 quizzes with correct answers and reasons.</p></div></div><div class="stack">' + Object.keys(AP.quiz).map(function (id) {
+    var Q = AP.quiz[id];
+    return '<div class="card"><h3>' + esc(id.replace("Q", "Quiz ")) + " · " + esc(Q.title) + '</h3><ol style="margin-top:8px">' + Q.qs.map(function (q) { return "<li>" + esc(q[0]) + '<div class="small muted">Answer ' + "ABCD"[q[2]] + ": " + esc(q[1][q[2]]) + ". " + esc(q[3]) + "</div></li>"; }).join("") + "</ol></div>";
+  }).join("") + "</div>");
+}
+function ansysRubric() {
+  if (ME.role === "student") return render('<div class="empty">Rubrics are for trainers.</div>');
+  render('<div class="page-head"><div><p class="mono">Trainer only</p><h1>Marking and rubrics</h1></div></div><div class="stack">' +
+    '<div class="card"><h3>Every assignment (100 marks)</h3>' + aTbl(["Item", "Marks"], [["Result matches the hand calculation (within 5%, CFD 10%)", "30"], ["All 5 case conditions run and tabulated", "30"], ["Model setup quality (units, mesh, supports, loads)", "20"], ["Report: screenshots, tables, explanations", "10"], ["Submission rules followed (file names, links, on time)", "10"]]) + "</div>" +
+    '<div class="card"><h3>Final project (100 marks)</h3>' + aTbl(["Part", "Marks"], AP.project.marking.map(function (m) { return [m[0], String(m[1])]; })) + "</div>" +
+    '<div class="card"><h3>Where to mark</h3><p class="small muted" style="margin-top:6px">Open the batch, then Review submissions to give a grade and feedback or send work back for redo.' + (ANS.bid ? ' <a class="hot" href="#/b/' + esc(ANS.bid) + '/work">Review submissions</a>' : "") + "</p></div></div>");
+}
+function ansysProject() {
+  var P = AP.project;
+  render(aBack("Day-wise plan", "#/ansys") + '<div class="page-head" style="margin-top:14px"><div><p class="mono">Individual · Days 17 and 18</p><h1>' + esc(P.title) + "</h1><p>" + esc(P.goal) + '</p></div></div><div class="stack">' +
+    '<div class="card"><h3>Choose one track</h3>' + aTbl(["Track", "Example topics", "Main tool"], P.tracks) + "</div>" +
+    '<div class="card"><h3>Complete steps</h3>' + aOl(P.steps) + "</div>" +
+    '<div class="card"><h3>5 conditions: all required</h3>' + aOl(P.conditions) + "</div>" +
+    '<div class="card"><h3>5 submission rules</h3>' + aOl(P.rules) + "</div>" +
+    '<div class="card"><h3>Marking (100)</h3>' + aTbl(["Part", "Marks"], P.marking.map(function (m) { return [m[0], String(m[1])]; })) + "</div>" +
+    (ANS.bid && ME.role === "student" ? '<div class="row"><a class="btn" href="#/b/' + esc(ANS.bid) + '">Submit your project (capstone box)</a></div>' : "") + "</div>");
+}
+async function ansysRoute(parts) {
+  var p1 = parts[1];
+  if (!p1) return ansysOverview();
+  if (/^\d+$/.test(p1)) return ansysDay(+p1);
+  if (p1 === "quiz") return ansysQuiz(parts[2]);
+  if (p1 === "quizzes") return ansysQuizzes();
+  if (p1 === "keys") return ansysKeys();
+  if (p1 === "rubric") return ansysRubric();
+  if (p1 === "project") return ansysProject();
+  return ansysOverview();
+}
+function ansysSeedCard() {
+  return '<div class="card next" style="margin-bottom:18px"><div><h3>Apply the ANSYS day-wise plan</h3><p class="small muted" style="margin-top:4px">Fills all 18 days with the lecture plan and gives each day its assignment (APDL 1–4, Workbench 1–5, CFD 1–5, final project) with steps, case conditions and submission rules. Your video and file links are kept. Day titles and notes are replaced.</p></div><button class="btn" type="button" id="ansysSeed">Apply to 18 days</button></div>';
+}
+function bindAnsysSeed(cid) {
+  var b = $("#ansysSeed"); if (!b) return;
+  b.onclick = async function () {
+    if (this.dataset.confirm !== "1") { this.dataset.confirm = "1"; this.textContent = "Tap again to confirm"; return; }
+    this.disabled = true;
+    try {
+      var ops = []; for (var n = 1; n <= 18; n++) { var s = aDaySeed(n); ops.push({ type: "set", merge: true, path: "courses/" + cid + "/lessons/d" + n, data: { day: n, title: s.title, notes: s.notes } }); ops.push({ type: "set", merge: true, path: "courses/" + cid + "/assignments/d" + n, data: { day: n, title: s.atitle, instructions: s.ainst } }); }
+      await DB.batchWrite(ops); toast("ANSYS day-wise plan applied to 18 days."); route();
+    } catch (er) { fail(er); this.disabled = false; }
+  };
+}
+
 })();
